@@ -72,6 +72,15 @@ Enums: `Role`, `Plan`, `SubscriptionStatus`, `Priority`.
 | `edit_card` | ✅ | ✅ | ✅ | ❌ |
 | `view_card` | ✅ | ✅ | ✅ | ✅ |
 
+**P1 delete-tier decisions (reuse existing actions — not separate `PermissionAction` values):**
+
+| Effective operation | Gates via | OWNER | ADMIN | MEMBER | VIEWER |
+|---|---|---|---|---|---|
+| Board delete / Column delete | `delete_project` | ✅ | ✅ | ❌ | ❌ |
+| Card delete | `edit_card` | ✅ | ✅ | ✅ | ❌ |
+
+Board/Column create/rename/reorder gate via `create_project` (same OWNER/ADMIN tier as project edit). Card delete via `edit_card` (MEMBER can delete cards) is intentional — confirmed by product owner in the P1 session.
+
 Resources (typing only): `billing` | `members` | `project` | `card`.
 
 ## 6. Security rules
