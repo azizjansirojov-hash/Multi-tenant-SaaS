@@ -8,6 +8,15 @@ vi.mock("@/lib/tenant", () => ({
   requireMembership: vi.fn(),
 }));
 
+vi.mock("@/lib/email", () => ({
+  buildInviteUrl: (token: string) => `http://localhost:3000/invite/${token}`,
+  sendInvitationEmail: vi.fn(),
+}));
+
+vi.mock("@/lib/rate-limit", () => ({
+  enforceInviteRateLimit: vi.fn().mockResolvedValue(null),
+}));
+
 vi.mock("@/lib/db", () => ({
   db: {
     invitation: {
@@ -38,6 +47,7 @@ vi.mock("@/lib/db", () => ({
 
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { sendInvitationEmail } from "@/lib/email";
 import { requireMembership } from "@/lib/tenant";
 import {
   acceptInvitation,
@@ -52,13 +62,19 @@ import { Role } from "@/generated/prisma/client";
 function mockAuth(user?: {
   id: string;
   email: string;
+  name?: string;
 }) {
   if (!user) {
     vi.mocked(auth as unknown as () => Promise<unknown>).mockResolvedValue(null);
     return;
   }
   vi.mocked(auth as unknown as () => Promise<unknown>).mockResolvedValue({
-    user: { id: user.id, email: user.email, sessionVersion: 0 },
+    user: {
+      id: user.id,
+      email: user.email,
+      name: user.name ?? "Owner",
+      sessionVersion: 0,
+    },
     expires: new Date(Date.now() + 3600_000).toISOString(),
   });
 }
@@ -71,7 +87,7 @@ function mockTenant(
     organizationId: "org-1",
     userId,
     role,
-    organization: { id: "org-1", slug: "acme" } as never,
+    organization: { id: "org-1", slug: "acme", name: "Acme" } as never,
     membership: { id: "m1", role } as never,
   });
 }
@@ -79,7 +95,8 @@ function mockTenant(
 describe("invitation & membership edge cases", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockAuth({ id: "owner-1", email: "owner@example.com" });
+    mockAuth({ id: "owner-1", email: "owner@example.com", name: "Owner" });
+    vi.mocked(sendInvitationEmail).mockResolvedValue({ sent: true });
   });
 
   it("inviteMember denies MEMBER role", async () => {
@@ -106,11 +123,11 @@ describe("invitation & membership edge cases", () => {
     }
   });
 
-  it("inviteMember creates invitation for ADMIN", async () => {
+  it("inviteMember creates invitation for ADMIN and sends email", async () => {
     mockTenant("ADMIN", "admin-1");
     vi.mocked(db.invitation.create).mockResolvedValue({
       id: "inv-1",
-      token: "tok",
+      token: "tok-abc",
     } as never);
 
     const result = await inviteMember({
@@ -119,6 +136,10 @@ describe("invitation & membership edge cases", () => {
       role: Role.MEMBER,
     });
     expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.emailSent).toBe(true);
+      expect(result.data.inviteUrl).toContain("/invite/tok-abc");
+    }
     expect(db.invitation.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -128,6 +149,40 @@ describe("invitation & membership edge cases", () => {
         }),
       })
     );
+    expect(sendInvitationEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "new@example.com",
+        orgName: "Acme",
+        inviterName: "Owner",
+        role: Role.MEMBER,
+        inviteUrl: "http://localhost:3000/invite/tok-abc",
+      })
+    );
+  });
+
+  it("inviteMember keeps invitation when email send fails", async () => {
+    mockTenant("ADMIN", "admin-1");
+    vi.mocked(db.invitation.create).mockResolvedValue({
+      id: "inv-2",
+      token: "tok-fail",
+    } as never);
+    vi.mocked(sendInvitationEmail).mockResolvedValue({
+      sent: false,
+      reason: "send_failed",
+    });
+
+    const result = await inviteMember({
+      organizationId: "org-1",
+      email: "fail@example.com",
+      role: Role.MEMBER,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.emailSent).toBe(false);
+      expect(result.data.token).toBe("tok-fail");
+      expect(result.data.inviteUrl).toContain("/invite/tok-fail");
+    }
+    expect(db.invitation.create).toHaveBeenCalled();
   });
 
   it("removeMembership rejects self-removal", async () => {

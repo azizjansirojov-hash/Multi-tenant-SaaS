@@ -128,6 +128,21 @@ export const reorderCardSchema = z.object({
   direction: z.enum(["up", "down"]),
 });
 
+export const moveCardSchema = z.object({
+  organizationId: z.string().min(1),
+  cardId: z.string().min(1),
+  targetColumnId: z.string().min(1),
+  beforeCardId: z.string().nullable(),
+  afterCardId: z.string().nullable(),
+});
+
+export const moveColumnSchema = z.object({
+  organizationId: z.string().min(1),
+  columnId: z.string().min(1),
+  beforeColumnId: z.string().nullable(),
+  afterColumnId: z.string().nullable(),
+});
+
 export const createCardSchema = z.object({
   organizationId: z.string().min(1),
   columnId: z.string().min(1),

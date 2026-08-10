@@ -53,6 +53,7 @@ export function MembersSettingsClient({
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [invitePending, setInvitePending] = useState(false);
   const [inviteLink, setInviteLink] = useState<string | null>(null);
+  const [inviteEmailWarning, setInviteEmailWarning] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const [actionError, setActionError] = useState<string | null>(null);
@@ -75,6 +76,7 @@ export function MembersSettingsClient({
     setInvitePending(true);
     setInviteError(null);
     setInviteLink(null);
+    setInviteEmailWarning(false);
     setCopied(false);
     const result = await inviteMember({
       organizationId,
@@ -86,8 +88,8 @@ export function MembersSettingsClient({
       setInviteError(result.error);
       return;
     }
-    const link = `${window.location.origin}/invite/${result.data.token}`;
-    setInviteLink(link);
+    setInviteLink(result.data.inviteUrl);
+    setInviteEmailWarning(!result.data.emailSent);
     setInviteEmail("");
   }
 
@@ -167,8 +169,8 @@ export function MembersSettingsClient({
           <CardHeader>
             <CardTitle>Invite member</CardTitle>
             <CardDescription>
-              Email delivery is not configured yet. Copy the invite link and send
-              it manually.
+              We email an invite link when email delivery is configured. You can
+              always copy the link to share manually.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -209,7 +211,17 @@ export function MembersSettingsClient({
             ) : null}
             {inviteLink ? (
               <div className="flex flex-col gap-2 rounded-lg border border-border p-3">
-                <p className="text-xs text-muted-foreground">Invite link (7-day expiry)</p>
+                {inviteEmailWarning ? (
+                  <p className="text-sm text-amber-700 dark:text-amber-400">
+                    Invitation created, but the email failed to send — you can
+                    share this link directly:
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Invite email sent. Link (7-day expiry) — share manually if
+                    needed:
+                  </p>
+                )}
                 <code className="break-all text-xs">{inviteLink}</code>
                 <Button type="button" variant="outline" size="sm" onClick={copyLink}>
                   {copied ? "Copied" : "Copy link"}

@@ -207,3 +207,63 @@ nothing to commit, working tree clean
 [cleanup] e2e rows removed
 ```
 
+---
+
+## Session — P2a: Email, Drag-and-Drop, Rate Limiting
+
+**Date:** 2026-08-10
+
+### Open questions (for human)
+
+1. **Resend key:** Placeholder only (`re_placeholder_replace_me` in `.env`). Real delivery not active until a live `RESEND_API_KEY` (and preferably a verified `RESEND_FROM_EMAIL` domain) is supplied.
+2. **Rate-limit store:** **Postgres fixed-window** (`RateLimitBucket`) — works across Vercel serverless instances without Redis. Acceptable for current scale; consider Upstash Redis later if auth volume grows.
+3. **Thresholds (tunable):** login 5/15m (email + IP), register 10/h per IP, invites 20/h per org, password change 5/15m per user.
+4. **Stripe Phase 6:** Still deferred — next session UX/hardening unless billing is pulled forward.
+
+### What shipped
+
+- Resend + React Email invitation template; `inviteMember` sends after DB create; placeholder/send-failure → soft success + copyable link warning in UI
+- `@dnd-kit` Kanban: card↔column and column reorder; fractional indexing + renormalize fallback; `moveCard` / `moveColumn` Server Actions (VIEWER + cross-tenant rejected)
+- Postgres rate limiting on login, register, invite, changePassword
+
+### Tests & coverage
+
+| Metric | After P1 | After P2a |
+|--------|----------|-----------|
+| Tests | 78 | **99** |
+| Statements | 50.66% | **51.33%** (442/861) |
+| Branches | 40.27% | 41.24% |
+| Lines | 50.59% | 51.31% |
+
+### Verification
+
+| Command | Result |
+|---------|--------|
+| `npx tsc --noEmit` | PASS (exit 0) |
+| `npx eslint src --max-warnings 0` | PASS (exit 0) |
+| `npm test` | PASS — 12 files, **99** tests |
+| `npm run build` | PASS |
+| `npx vitest run --coverage` | PASS — statements **51.33%** |
+
+### Manual traces
+
+```
+[trace] isResendConfigured= false
+[trace] inviteUrl= http://localhost:3000/invite/manual-trace-token
+[email] RESEND_API_KEY is missing or a placeholder — skipping send.
+[trace] sendResult= { sent: false, reason: 'placeholder' }
+[trace] login attempt 1..5 ALLOWED; attempt 6 BLOCKED
+```
+
+Drag persistence: covered by `moveCard` / fractional-index unit tests + Server Action tenant/VIEWER gates; UI uses optimistic local state then `moveCard`/`moveColumn`.
+
+### Secrets check
+
+- `RESEND_API_KEY` only in `.env` (untracked) and empty name in `.env.example`
+- Test fixtures use fake keys (`re_placeholder_replace_me`, `re_live_abc123xyz`) — no real secret committed
+
+### Commit
+
+- Message: `P2a: real invitation email (Resend), drag-and-drop Kanban (dnd-kit), rate limiting on auth actions`
+- **Not pushed** (separate confirmed step)
+

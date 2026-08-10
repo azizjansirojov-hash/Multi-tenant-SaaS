@@ -167,3 +167,15 @@ model ProcessedStripeEvent {
   type      String
   createdAt DateTime @default(now())
 }
+
+/// Fixed-window rate-limit counters (shared across serverless instances)
+model RateLimitBucket {
+  id          String   @id @default(cuid())
+  key         String
+  windowStart DateTime
+  count       Int      @default(0)
+  updatedAt   DateTime @updatedAt
+
+  @@unique([key, windowStart])
+  @@index([key])
+}

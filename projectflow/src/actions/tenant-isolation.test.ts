@@ -69,6 +69,7 @@ import {
   updateCard,
   deleteCard,
   reorderCard,
+  moveCard,
 } from "@/actions/card";
 
 const ORG_A = "org-a";
@@ -428,5 +429,40 @@ describe("P1 CRUD permission + happy paths", () => {
       direction: "up",
     });
     expect(result.ok).toBe(false);
+  });
+
+  it("moveCard denies VIEWER", async () => {
+    mockTenant(ORG_A, "VIEWER");
+    const result = await moveCard({
+      organizationId: ORG_A,
+      cardId: "card-1",
+      targetColumnId: "col-1",
+      beforeCardId: null,
+      afterCardId: null,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe("Access denied");
+    expect(db.card.update).not.toHaveBeenCalled();
+  });
+
+  it("moveCard rejects cross-tenant target column", async () => {
+    mockTenant(ORG_A, "MEMBER");
+    vi.mocked(db.card.findFirst).mockResolvedValue({
+      id: "card-1",
+      columnId: "col-a",
+      position: 0,
+    } as never);
+    vi.mocked(db.column.findFirst).mockResolvedValue(null);
+
+    const result = await moveCard({
+      organizationId: ORG_A,
+      cardId: "card-1",
+      targetColumnId: "col-foreign",
+      beforeCardId: null,
+      afterCardId: null,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe("Column not found");
+    expect(db.card.update).not.toHaveBeenCalled();
   });
 });

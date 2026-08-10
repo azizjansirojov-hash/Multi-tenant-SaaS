@@ -2,12 +2,14 @@
 
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { planMove } from "@/lib/fractional-index";
 import { can } from "@/lib/permissions";
 import { requireMembership } from "@/lib/tenant";
 import {
   ActionResult,
   createCardSchema,
   deleteCardSchema,
+  moveCardSchema,
   reorderCardSchema,
   updateCardSchema,
   zodErrorResult,
@@ -292,5 +294,107 @@ export async function reorderCard(
   return {
     ok: true,
     data: { id: existing.id, position: swapWith.position },
+  };
+}
+
+export async function moveCard(
+  input: unknown
+): Promise<ActionResult<{ id: string; columnId: string; position: number }>> {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return { ok: false, error: "Unauthorized" };
+  }
+
+  const orgId = peekOrgId(input);
+  if (!orgId) {
+    return {
+      ok: false,
+      error: "Validation failed",
+      fieldErrors: { organizationId: ["Required"] },
+    };
+  }
+
+  const tenant = await requireMembership(orgId);
+  if (!can(tenant.role, "edit_card", "card")) {
+    return { ok: false, error: "Access denied" };
+  }
+
+  const parsed = moveCardSchema.safeParse(input);
+  if (!parsed.success) {
+    return zodErrorResult(parsed.error);
+  }
+
+  const existing = await db.card.findFirst({
+    where: {
+      id: parsed.data.cardId,
+      column: { board: { project: { organizationId: tenant.organizationId } } },
+    },
+  });
+  if (!existing) {
+    return { ok: false, error: "Card not found" };
+  }
+
+  const targetColumn = await db.column.findFirst({
+    where: {
+      id: parsed.data.targetColumnId,
+      board: { project: { organizationId: tenant.organizationId } },
+    },
+    select: { id: true },
+  });
+  if (!targetColumn) {
+    return { ok: false, error: "Column not found" };
+  }
+
+  const siblings = await db.card.findMany({
+    where: { columnId: targetColumn.id },
+    orderBy: { position: "asc" },
+    select: { id: true, position: true },
+  });
+
+  const plan = planMove(
+    siblings,
+    existing.id,
+    parsed.data.beforeCardId,
+    parsed.data.afterCardId
+  );
+
+  if (plan.kind === "single") {
+    await db.card.update({
+      where: { id: existing.id },
+      data: {
+        columnId: targetColumn.id,
+        position: plan.position,
+      },
+    });
+    return {
+      ok: true,
+      data: {
+        id: existing.id,
+        columnId: targetColumn.id,
+        position: plan.position,
+      },
+    };
+  }
+
+  await db.$transaction(
+    plan.updates.map((u) =>
+      db.card.update({
+        where: { id: u.id },
+        data: {
+          position: u.position,
+          ...(u.id === existing.id ? { columnId: targetColumn.id } : {}),
+        },
+      })
+    )
+  );
+
+  const moved = plan.updates.find((u) => u.id === existing.id)!;
+  return {
+    ok: true,
+    data: {
+      id: existing.id,
+      columnId: targetColumn.id,
+      position: moved.position,
+    },
   };
 }

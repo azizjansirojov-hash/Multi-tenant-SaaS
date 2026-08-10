@@ -6,6 +6,11 @@ import { AuthError } from "next-auth";
 import { auth, signIn } from "@/lib/auth";
 import { db } from "@/lib/db";
 import {
+  enforceChangePasswordRateLimit,
+  enforceLoginRateLimit,
+  enforceRegisterRateLimit,
+} from "@/lib/rate-limit";
+import {
   ActionResult,
   changePasswordSchema,
   loginSchema,
@@ -29,6 +34,9 @@ export async function registerAction(
   if (!parsed.success) {
     return zodErrorResult(parsed.error);
   }
+
+  const limited = await enforceRegisterRateLimit();
+  if (limited) return limited;
 
   const { name, email, password, organizationName } = parsed.data;
 
@@ -87,6 +95,9 @@ export async function loginAction(
     return zodErrorResult(parsed.error);
   }
 
+  const limited = await enforceLoginRateLimit(parsed.data.email);
+  if (limited) return limited;
+
   try {
     await signIn("credentials", {
       email: parsed.data.email,
@@ -117,6 +128,9 @@ export async function changePassword(
   if (!session?.user?.id) {
     return { ok: false, error: "Unauthorized" };
   }
+
+  const limited = await enforceChangePasswordRateLimit(session.user.id);
+  if (limited) return limited;
 
   const parsed = changePasswordSchema.safeParse(input);
   if (!parsed.success) {

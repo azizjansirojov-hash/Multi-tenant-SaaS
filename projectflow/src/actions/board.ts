@@ -2,6 +2,7 @@
 
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { planMove } from "@/lib/fractional-index";
 import { can } from "@/lib/permissions";
 import { requireMembership } from "@/lib/tenant";
 import {
@@ -10,6 +11,7 @@ import {
   createColumnSchema,
   deleteBoardSchema,
   deleteColumnSchema,
+  moveColumnSchema,
   reorderColumnSchema,
   updateBoardSchema,
   updateColumnSchema,
@@ -376,6 +378,83 @@ export async function reorderColumn(
   return {
     ok: true,
     data: { id: existing.id, position: swapWith.position },
+  };
+}
+
+export async function moveColumn(
+  input: unknown
+): Promise<ActionResult<{ id: string; position: number }>> {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return { ok: false, error: "Unauthorized" };
+  }
+
+  const orgId = peekOrgId(input);
+  if (!orgId) {
+    return {
+      ok: false,
+      error: "Validation failed",
+      fieldErrors: { organizationId: ["Required"] },
+    };
+  }
+
+  const tenant = await requireMembership(orgId);
+  if (!can(tenant.role, "create_project", "project")) {
+    return { ok: false, error: "Access denied" };
+  }
+
+  const parsed = moveColumnSchema.safeParse(input);
+  if (!parsed.success) {
+    return zodErrorResult(parsed.error);
+  }
+
+  const existing = await db.column.findFirst({
+    where: {
+      id: parsed.data.columnId,
+      board: { project: { organizationId: tenant.organizationId } },
+    },
+  });
+  if (!existing) {
+    return { ok: false, error: "Column not found" };
+  }
+
+  const siblings = await db.column.findMany({
+    where: { boardId: existing.boardId },
+    orderBy: { position: "asc" },
+    select: { id: true, position: true },
+  });
+
+  const plan = planMove(
+    siblings,
+    existing.id,
+    parsed.data.beforeColumnId,
+    parsed.data.afterColumnId
+  );
+
+  if (plan.kind === "single") {
+    await db.column.update({
+      where: { id: existing.id },
+      data: { position: plan.position },
+    });
+    return {
+      ok: true,
+      data: { id: existing.id, position: plan.position },
+    };
+  }
+
+  await db.$transaction(
+    plan.updates.map((u) =>
+      db.column.update({
+        where: { id: u.id },
+        data: { position: u.position },
+      })
+    )
+  );
+
+  const moved = plan.updates.find((u) => u.id === existing.id)!;
+  return {
+    ok: true,
+    data: { id: existing.id, position: moved.position },
   };
 }
 

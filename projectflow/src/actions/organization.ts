@@ -2,7 +2,9 @@
 
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { buildInviteUrl, sendInvitationEmail } from "@/lib/email";
 import { can } from "@/lib/permissions";
+import { enforceInviteRateLimit } from "@/lib/rate-limit";
 import { requireMembership } from "@/lib/tenant";
 import {
   ActionResult,
@@ -157,7 +159,14 @@ export async function listMembers(
 
 export async function inviteMember(
   input: unknown
-): Promise<ActionResult<{ id: string; token: string }>> {
+): Promise<
+  ActionResult<{
+    id: string;
+    token: string;
+    emailSent: boolean;
+    inviteUrl: string;
+  }>
+> {
   const session = await auth();
   if (!session?.user?.id) {
     return { ok: false, error: "Unauthorized" };
@@ -177,6 +186,9 @@ export async function inviteMember(
     return { ok: false, error: "Access denied" };
   }
 
+  const limited = await enforceInviteRateLimit(tenant.organizationId);
+  if (limited) return limited;
+
   const parsed = inviteMemberSchema.safeParse(input);
   if (!parsed.success) {
     return zodErrorResult(parsed.error);
@@ -193,7 +205,29 @@ export async function inviteMember(
     },
   });
 
-  return { ok: true, data: { id: invitation.id, token: invitation.token } };
+  const inviteUrl = buildInviteUrl(invitation.token);
+
+  const orgName = tenant.organization.name || "your organization";
+  const inviterName =
+    session.user.name?.trim() || session.user.email || "A teammate";
+
+  const emailResult = await sendInvitationEmail({
+    to: parsed.data.email.toLowerCase(),
+    orgName,
+    inviterName,
+    role: parsed.data.role,
+    inviteUrl,
+  });
+
+  return {
+    ok: true,
+    data: {
+      id: invitation.id,
+      token: invitation.token,
+      emailSent: emailResult.sent,
+      inviteUrl,
+    },
+  };
 }
 
 /**
