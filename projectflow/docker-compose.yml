@@ -1,0 +1,25 @@
+# LOCAL DEV ONLY — credentials are for local Docker Postgres, never reuse in production.
+services:
+  postgres:
+    image: postgres:16
+    container_name: syzx-postgres-dev
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      # LOCAL DEV ONLY
+      POSTGRES_USER: syzx_dev
+      # LOCAL DEV ONLY
+      POSTGRES_PASSWORD: syzx_dev_password
+      # LOCAL DEV ONLY
+      POSTGRES_DB: syzx_dev
+    volumes:
+      - syzx_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U syzx_dev -d syzx_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  syzx_pgdata:
