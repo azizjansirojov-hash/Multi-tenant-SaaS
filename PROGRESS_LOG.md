@@ -45,8 +45,8 @@ Confirmed **not** staged: `.env`, `auth_out.txt`, `cookies.txt`, `node_modules`,
 #### Commit
 
 - Message: `P0 foundations complete: auth, RBAC, tenant isolation, Zod, migrations, Stripe webhook, session invalidation, expanded tests`
-- Commit hash: _(filled after commit — see below)_
-- Remote: `origin` → `https://github.com/azizjansirojov-hash/Multi-tenant-SaaS.git` — **not pushed** (local-only until explicit push; no off-machine backup of this commit yet)
+- Commit hash: **`0a3a8a3`**
+- Remote: `origin` → `https://github.com/azizjansirojov-hash/Multi-tenant-SaaS.git` — **not pushed** (branch is ahead of `origin/main` by 1 commit; local-only until explicit push)
 
 #### Previously untracked / at-risk files now captured
 
@@ -106,4 +106,15 @@ Next.js 15.5.22 lists `/api/auth/[...nextauth]` as a dynamic App Router handler 
 
 ### Post-commit confirmation
 
-_(Updated after `git commit`)_
+```
+git log --oneline -5
+0a3a8a3 P0 foundations complete: auth, RBAC, tenant isolation, Zod, migrations, Stripe webhook, session invalidation, expanded tests
+751fb4c Initial commit
+
+git status
+On branch main
+Your branch is ahead of 'origin/main' by 1 commit.
+nothing to commit, working tree clean
+```
+
+`.env` remained untracked/local-only. `auth_out.txt` / `cookies.txt` ignored. No push performed.
