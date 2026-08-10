@@ -62,7 +62,14 @@ export default function LoginForm() {
       </form>
       <p className="text-sm text-muted-foreground">
         No account?{" "}
-        <Link href="/register" className="underline">
+        <Link
+          href={
+            searchParams.get("callbackUrl")
+              ? `/register?callbackUrl=${encodeURIComponent(searchParams.get("callbackUrl")!)}`
+              : "/register"
+          }
+          className="underline"
+        >
           Register
         </Link>
       </p>

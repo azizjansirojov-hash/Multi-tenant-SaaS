@@ -118,3 +118,92 @@ nothing to commit, working tree clean
 ```
 
 `.env` remained untracked/local-only. `auth_out.txt` / `cookies.txt` ignored. No push performed.
+
+---
+
+## Session — P1 Core CRUD
+
+**Date:** 2026-08-10
+
+### Open questions (answered)
+
+1. **Task 1 org-creation pattern:** **Pattern A** (already implemented in P0). `registerSchema` includes `organizationName`; `registerAction` creates User + Organization + OWNER Membership in one transaction, collision-safe slug (`-2`, `-3`, …), then client redirects to `/{orgSlug}/projects`. Chosen because it matches the existing register Server Action and UI field — no separate onboarding route needed.
+
+2. **Invitation email match:** **Strict email match** (case-insensitive). Accept fails with `"Invitation email does not match your account"` if session email ≠ invite email. Safer against invite-link forwarding; flag for human review if product wants allow-any-authenticated redemption.
+
+3. **Invite expiry:** **7 days** (unchanged from P0 `inviteMember`). Reasonable default; make configurable in P2 if needed.
+
+4. **Delete permission tiers** (from `ARCHITECTURE.md` §5 / `permissions.ts`):
+   - **Project delete:** `delete_project` → OWNER/ADMIN only (`| delete_project | ✅ | ✅ | ❌ | ❌ |`).
+   - **Board / Column delete:** no dedicated matrix rows — reuse `delete_project` (OWNER/ADMIN), same as create/edit reuse `create_project`.
+   - **Card delete:** no `delete_card` action — reuse `edit_card` → OWNER/ADMIN/MEMBER (`| edit_card | ✅ | ✅ | ✅ | ❌ |`).
+
+5. **Invite email delivery:** **Acceptable as P2.** UI surfaces a copyable `/invite/{token}` link; no email provider installed. Non-technical invitees need the link sent manually until email is wired.
+
+### What shipped
+
+- Org settings UI: rename (slug immutable), members list, role change, remove, invite + copyable link
+- `acceptedAt` migration; `acceptInvitation`; `/invite/[token]` with login/register `callbackUrl`
+- Zero-OWNER protection on role demotion and remove
+- Projects CRUD UI + empty state; default `"Main"` board on create
+- Board/column/card Kanban UI (up/down reorder, no DnD); assignee must be org member
+- shadcn: input, textarea, select, dialog, dropdown-menu, card, badge, avatar, label
+- E2E script: `projectflow/scripts/p1-e2e-trace.ts`
+
+### Tests & coverage
+
+| Metric | P0 baseline (PROGRESS_LOG) | After P1 |
+|--------|----------------------------|----------|
+| Tests | 58 | **78** |
+| Statements | ~42% (brief) / prior session | **50.66%** (342/675) |
+| Branches | — | 40.27% |
+| Lines | — | 50.59% |
+
+### Verification
+
+| Command | Result |
+|---------|--------|
+| `npx tsc --noEmit` | PASS (exit 0) |
+| `npx eslint src --max-warnings 0` | PASS (exit 0) |
+| `npm test` | PASS — 9 files, **78** tests |
+| `npm run build` | PASS |
+| `npx vitest run --coverage` | PASS — statements **50.66%** |
+| `npx tsx scripts/p1-e2e-trace.ts` | PASS (see trace below) |
+
+### E2E trace (Docker Postgres)
+
+```
+[1] Register owner owner-msn2i2td@e2e.test + org
+  user=cmsn2i33h000038x9f8u70e75 org=e2e-org-msn2i2td role=OWNER
+
+[2] Invite second user as MEMBER
+  invite token=57e881b8… link=/invite/57e881b89b04e8d117bafd74d53ce82302934b2b9259efc6
+
+[3] Second user registers member-msn2i2td@e2e.test and accepts invite (strict email match)
+  membership created role=MEMBER acceptedAt set
+
+[4] Owner creates project (+ default Main board)
+  project=cmsn2i363000638x92alo5yr1 board=cmsn2i365000738x9v42oi75p name=Main
+
+[5] Owner creates two columns
+  columns=Todo,Doing
+
+[6] Owner creates card and assigns to member
+  card=cmsn2i36v000a38x9bwbagi0o assignee=member-msn2i2td@e2e.test
+
+[7] MEMBER attempts delete_project (must be denied by matrix)
+  can(MEMBER, delete_project)=false
+  Access denied (expected)
+
+[7b] VIEWER-equivalent: MEMBER can create_card
+  can(MEMBER, create_card)=true
+  can(VIEWER, create_card)=false
+
+[8] Cross-tenant: member cannot see other org project
+  scoped findFirst for foreign project=null
+
+[DONE] Journey OK — org=/e2e-org-msn2i2td/projects board=/e2e-org-msn2i2td/board/cmsn2i365000738x9v42oi75p
+
+[cleanup] e2e rows removed
+```
+

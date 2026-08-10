@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, FormEvent } from "react";
-import { useRouter } from "next/navigation";
+import { useState, FormEvent, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { registerAction } from "@/actions/auth";
 
-export default function RegisterPage() {
+function RegisterForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -26,9 +27,14 @@ export default function RegisterPage() {
       setError(result.error);
       return;
     }
-    router.push(`/${result.data.orgSlug}/projects`);
+    const callback = searchParams.get("callbackUrl");
+    router.push(callback || `/${result.data.orgSlug}/projects`);
     router.refresh();
   }
+
+  const loginHref = searchParams.get("callbackUrl")
+    ? `/login?callbackUrl=${encodeURIComponent(searchParams.get("callbackUrl")!)}`
+    : "/login";
 
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center gap-6 px-6">
@@ -75,10 +81,18 @@ export default function RegisterPage() {
       </form>
       <p className="text-sm text-muted-foreground">
         Already have an account?{" "}
-        <Link href="/login" className="underline">
+        <Link href={loginHref} className="underline">
           Sign in
         </Link>
       </p>
     </main>
+  );
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense fallback={<main className="p-8">Loading…</main>}>
+      <RegisterForm />
+    </Suspense>
   );
 }

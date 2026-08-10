@@ -144,14 +144,16 @@ model Card {
 }
 
 model Invitation {
-  id             String   @id @default(cuid())
+  id             String    @id @default(cuid())
   organizationId String
   email          String
-  role           Role     @default(MEMBER)
-  token          String   @unique
+  role           Role      @default(MEMBER)
+  token          String    @unique
   expiresAt      DateTime
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  /// Set when the invitation is successfully accepted (consumed)
+  acceptedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 

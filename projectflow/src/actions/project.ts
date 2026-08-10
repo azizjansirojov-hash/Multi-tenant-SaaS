@@ -51,12 +51,22 @@ export async function createProject(
     return zodErrorResult(parsed.error);
   }
 
-  const project = await db.project.create({
-    data: {
-      organizationId: tenant.organizationId,
-      name: parsed.data.name,
-      description: parsed.data.description,
-    },
+  const project = await db.$transaction(async (tx) => {
+    const created = await tx.project.create({
+      data: {
+        organizationId: tenant.organizationId,
+        name: parsed.data.name,
+        description: parsed.data.description,
+      },
+    });
+    await tx.board.create({
+      data: {
+        projectId: created.id,
+        name: "Main",
+        position: 0,
+      },
+    });
+    return created;
   });
 
   return { ok: true, data: { id: project.id } };
@@ -154,7 +164,14 @@ export async function deleteProject(
 export async function listProjects(
   organizationId: string
 ): Promise<
-  ActionResult<{ id: string; name: string; description: string | null }[]>
+  ActionResult<
+    {
+      id: string;
+      name: string;
+      description: string | null;
+      firstBoardId: string | null;
+    }[]
+  >
 > {
   const session = await auth();
   if (!session?.user?.id) {
@@ -168,9 +185,26 @@ export async function listProjects(
 
   const projects = await db.project.findMany({
     where: { organizationId: tenant.organizationId },
-    select: { id: true, name: true, description: true },
+    select: {
+      id: true,
+      name: true,
+      description: true,
+      boards: {
+        orderBy: { position: "asc" },
+        take: 1,
+        select: { id: true },
+      },
+    },
     orderBy: { createdAt: "desc" },
   });
 
-  return { ok: true, data: projects };
+  return {
+    ok: true,
+    data: projects.map((p) => ({
+      id: p.id,
+      name: p.name,
+      description: p.description,
+      firstBoardId: p.boards[0]?.id ?? null,
+    })),
+  };
 }

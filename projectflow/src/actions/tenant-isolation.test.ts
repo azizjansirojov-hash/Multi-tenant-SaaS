@@ -19,32 +19,65 @@ vi.mock("@/lib/db", () => ({
     },
     board: {
       findFirst: vi.fn(),
-      create: vi.fn(),
-    },
-    column: {
-      findFirst: vi.fn(),
-      create: vi.fn(),
-    },
-    card: {
-      findFirst: vi.fn(),
+      findMany: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
       delete: vi.fn(),
     },
+    column: {
+      findFirst: vi.fn(),
+      findMany: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+    },
+    card: {
+      findFirst: vi.fn(),
+      findMany: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+    },
+    membership: {
+      findFirst: vi.fn(),
+    },
+    $transaction: vi.fn(),
   },
 }));
 
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { requireMembership } from "@/lib/tenant";
-import { createProject, listProjects, updateProject } from "@/actions/project";
-import { createBoard, createColumn, getBoardForOrg } from "@/actions/board";
-import { createCard, updateCard, deleteCard } from "@/actions/card";
+import {
+  createProject,
+  listProjects,
+  updateProject,
+  deleteProject,
+} from "@/actions/project";
+import {
+  createBoard,
+  createColumn,
+  getBoardForOrg,
+  updateBoard,
+  deleteBoard,
+  updateColumn,
+  deleteColumn,
+  reorderColumn,
+} from "@/actions/board";
+import {
+  createCard,
+  updateCard,
+  deleteCard,
+  reorderCard,
+} from "@/actions/card";
 
 const ORG_A = "org-a";
 const ORG_B = "org-b";
 
-function mockTenant(orgId: string, role: "OWNER" | "MEMBER" | "VIEWER" = "OWNER") {
+function mockTenant(
+  orgId: string,
+  role: "OWNER" | "ADMIN" | "MEMBER" | "VIEWER" = "OWNER"
+) {
   vi.mocked(requireMembership).mockResolvedValue({
     organizationId: orgId,
     userId: "user-a",
@@ -138,13 +171,14 @@ describe("cross-tenant isolation (Project / Board / Column / Card)", () => {
 
     const result = await getBoardForOrg(ORG_A, "board-b");
     expect(result.ok).toBe(false);
-    expect(db.board.findFirst).toHaveBeenCalledWith({
-      where: {
-        id: "board-b",
-        project: { organizationId: ORG_A },
-      },
-      select: { id: true, name: true },
-    });
+    expect(db.board.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          id: "board-b",
+          project: { organizationId: ORG_A },
+        },
+      })
+    );
   });
 
   it("createCard scopes column via board.project.organizationId join", async () => {
@@ -202,7 +236,7 @@ describe("cross-tenant isolation (Project / Board / Column / Card)", () => {
     });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toBe("Access denied");
-    expect(db.project.create).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
   });
 
   it("documents ORG_B id is never used as write scope when tenant is ORG_A", async () => {
@@ -218,5 +252,181 @@ describe("cross-tenant isolation (Project / Board / Column / Card)", () => {
     };
     expect(where.organizationId).toBe(ORG_A);
     expect(where.organizationId).not.toBe(ORG_B);
+  });
+});
+
+describe("P1 CRUD permission + happy paths", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(auth as unknown as () => Promise<unknown>).mockResolvedValue({
+      user: { id: "user-a", email: "a@example.com", sessionVersion: 0 },
+      expires: new Date(Date.now() + 3600_000).toISOString(),
+    });
+  });
+
+  it("createProject creates default Main board in transaction", async () => {
+    mockTenant(ORG_A, "ADMIN");
+    const tx = {
+      project: {
+        create: vi.fn().mockResolvedValue({ id: "p1", name: "Alpha" }),
+      },
+      board: { create: vi.fn().mockResolvedValue({ id: "b1" }) },
+    };
+    vi.mocked(db.$transaction).mockImplementation(async (fn) =>
+      (fn as unknown as (t: typeof tx) => Promise<unknown>)(tx)
+    );
+
+    const result = await createProject({
+      organizationId: ORG_A,
+      name: "Alpha",
+    });
+    expect(result.ok).toBe(true);
+    expect(tx.board.create).toHaveBeenCalledWith({
+      data: { projectId: "p1", name: "Main", position: 0 },
+    });
+  });
+
+  it("deleteProject denies MEMBER", async () => {
+    mockTenant(ORG_A, "MEMBER");
+    const result = await deleteProject({
+      organizationId: ORG_A,
+      projectId: "p1",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe("Access denied");
+  });
+
+  it("updateBoard / deleteBoard deny MEMBER (create_project / delete_project)", async () => {
+    mockTenant(ORG_A, "MEMBER");
+    const upd = await updateBoard({
+      organizationId: ORG_A,
+      boardId: "b1",
+      name: "X",
+    });
+    expect(upd.ok).toBe(false);
+
+    const del = await deleteBoard({
+      organizationId: ORG_A,
+      boardId: "b1",
+    });
+    expect(del.ok).toBe(false);
+  });
+
+  it("updateColumn scopes via join path; deleteColumn denies MEMBER", async () => {
+    mockTenant(ORG_A, "OWNER");
+    vi.mocked(db.column.findFirst).mockResolvedValue({
+      id: "c1",
+      boardId: "b1",
+    } as never);
+    vi.mocked(db.column.update).mockResolvedValue({ id: "c1" } as never);
+
+    const upd = await updateColumn({
+      organizationId: ORG_A,
+      columnId: "c1",
+      name: "Doing",
+    });
+    expect(upd.ok).toBe(true);
+    expect(db.column.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: "c1",
+        board: { project: { organizationId: ORG_A } },
+      },
+    });
+
+    mockTenant(ORG_A, "MEMBER");
+    const del = await deleteColumn({
+      organizationId: ORG_A,
+      columnId: "c1",
+    });
+    expect(del.ok).toBe(false);
+  });
+
+  it("reorderColumn swaps positions within tenant-scoped board", async () => {
+    mockTenant(ORG_A, "ADMIN");
+    vi.mocked(db.column.findFirst).mockResolvedValue({
+      id: "c2",
+      boardId: "b1",
+      position: 1,
+    } as never);
+    vi.mocked(db.column.findMany).mockResolvedValue([
+      { id: "c1", position: 0 },
+      { id: "c2", position: 1 },
+    ] as never);
+    vi.mocked(db.$transaction).mockResolvedValue([]);
+
+    const result = await reorderColumn({
+      organizationId: ORG_A,
+      columnId: "c2",
+      direction: "up",
+    });
+    expect(result.ok).toBe(true);
+    expect(db.$transaction).toHaveBeenCalled();
+  });
+
+  it("createCard rejects assignee outside organization", async () => {
+    mockTenant(ORG_A, "MEMBER");
+    vi.mocked(db.column.findFirst).mockResolvedValue({
+      id: "col-1",
+    } as never);
+    vi.mocked(db.membership.findFirst).mockResolvedValue(null);
+    vi.mocked(db.card.findFirst).mockResolvedValue(null);
+
+    const result = await createCard({
+      organizationId: ORG_A,
+      columnId: "col-1",
+      title: "Task",
+      assigneeId: "outsider",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe(
+        "Assignee must be a member of this organization"
+      );
+    }
+    expect(db.card.create).not.toHaveBeenCalled();
+  });
+
+  it("createCard happy path MEMBER with in-org assignee", async () => {
+    mockTenant(ORG_A, "MEMBER");
+    vi.mocked(db.column.findFirst).mockResolvedValue({
+      id: "col-1",
+    } as never);
+    vi.mocked(db.membership.findFirst).mockResolvedValue({
+      id: "m2",
+    } as never);
+    vi.mocked(db.card.findFirst).mockResolvedValue(null);
+    vi.mocked(db.card.create).mockResolvedValue({ id: "card-1" } as never);
+
+    const result = await createCard({
+      organizationId: ORG_A,
+      columnId: "col-1",
+      title: "Task",
+      assigneeId: "user-b",
+    });
+    expect(result.ok).toBe(true);
+    expect(db.membership.findFirst).toHaveBeenCalledWith({
+      where: { userId: "user-b", organizationId: ORG_A },
+      select: { id: true },
+    });
+  });
+
+  it("deleteCard denies VIEWER", async () => {
+    mockTenant(ORG_A, "VIEWER");
+    const result = await deleteCard({
+      organizationId: ORG_A,
+      cardId: "card-1",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe("Access denied");
+  });
+
+  it("reorderCard denies VIEWER", async () => {
+    mockTenant(ORG_A, "VIEWER");
+    const result = await reorderCard({
+      organizationId: ORG_A,
+      cardId: "card-1",
+      direction: "up",
+    });
+    expect(result.ok).toBe(false);
   });
 });

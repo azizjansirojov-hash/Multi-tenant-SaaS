@@ -2,6 +2,8 @@ import { auth } from "@/lib/auth";
 import { getTenantId } from "@/lib/tenant";
 import { can } from "@/lib/permissions";
 import { getBoardForOrg } from "@/actions/board";
+import { listMembers } from "@/actions/organization";
+import { BoardClient } from "@/components/board/board-client";
 import { redirect } from "next/navigation";
 
 export default async function BoardPage({
@@ -26,18 +28,26 @@ export default async function BoardPage({
     return <main className="p-8">Access denied</main>;
   }
 
-  const board = await getBoardForOrg(tenant.organizationId, boardId);
+  const [board, members] = await Promise.all([
+    getBoardForOrg(tenant.organizationId, boardId),
+    listMembers(tenant.organizationId),
+  ]);
+
+  if (!board.ok) {
+    return (
+      <main className="p-8">
+        <p className="text-destructive">{board.error}</p>
+      </main>
+    );
+  }
 
   return (
-    <main className="p-8">
-      <h1 className="text-2xl font-semibold">
-        {board.ok ? board.data.name : "Board"}
-      </h1>
-      {!board.ok ? (
-        <p className="text-destructive">{board.error}</p>
-      ) : (
-        <p className="text-sm text-muted-foreground">Board ID {board.data.id}</p>
-      )}
-    </main>
+    <BoardClient
+      organizationId={tenant.organizationId}
+      orgSlug={orgSlug}
+      role={tenant.role}
+      board={board.data}
+      members={members.ok ? members.data : []}
+    />
   );
 }

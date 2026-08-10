@@ -30,7 +30,7 @@ export const createOrganizationSchema = z.object({
 
 export const updateOrganizationSchema = z.object({
   organizationId: z.string().min(1),
-  name: z.string().trim().min(1).max(100).optional(),
+  name: z.string().trim().min(1).max(100),
 });
 
 export const inviteMemberSchema = z.object({
@@ -39,9 +39,19 @@ export const inviteMemberSchema = z.object({
   role: z.nativeEnum(Role).default(Role.MEMBER),
 });
 
+export const acceptInvitationSchema = z.object({
+  token: z.string().min(1),
+});
+
 export const removeMembershipSchema = z.object({
   organizationId: z.string().min(1),
   membershipId: z.string().min(1),
+});
+
+export const updateMembershipRoleSchema = z.object({
+  organizationId: z.string().min(1),
+  membershipId: z.string().min(1),
+  role: z.nativeEnum(Role),
 });
 
 export const changePasswordSchema = z.object({
@@ -77,11 +87,45 @@ export const createBoardSchema = z.object({
   position: z.number().optional(),
 });
 
+export const updateBoardSchema = z.object({
+  organizationId: z.string().min(1),
+  boardId: z.string().min(1),
+  name: z.string().trim().min(1).max(200),
+});
+
+export const deleteBoardSchema = z.object({
+  organizationId: z.string().min(1),
+  boardId: z.string().min(1),
+});
+
 export const createColumnSchema = z.object({
   organizationId: z.string().min(1),
   boardId: z.string().min(1),
   name: z.string().trim().min(1, "Name is required").max(200),
   position: z.number().optional(),
+});
+
+export const updateColumnSchema = z.object({
+  organizationId: z.string().min(1),
+  columnId: z.string().min(1),
+  name: z.string().trim().min(1).max(200),
+});
+
+export const deleteColumnSchema = z.object({
+  organizationId: z.string().min(1),
+  columnId: z.string().min(1),
+});
+
+export const reorderColumnSchema = z.object({
+  organizationId: z.string().min(1),
+  columnId: z.string().min(1),
+  direction: z.enum(["up", "down"]),
+});
+
+export const reorderCardSchema = z.object({
+  organizationId: z.string().min(1),
+  cardId: z.string().min(1),
+  direction: z.enum(["up", "down"]),
 });
 
 export const createCardSchema = z.object({

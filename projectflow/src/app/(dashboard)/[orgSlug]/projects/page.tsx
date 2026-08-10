@@ -2,6 +2,7 @@ import { auth } from "@/lib/auth";
 import { getTenantId } from "@/lib/tenant";
 import { can } from "@/lib/permissions";
 import { listProjects } from "@/actions/project";
+import { ProjectsClient } from "@/components/projects/projects-client";
 import { redirect } from "next/navigation";
 
 export default async function ProjectsPage({
@@ -29,23 +30,14 @@ export default async function ProjectsPage({
   const projects = await listProjects(tenant.organizationId);
 
   return (
-    <main className="mx-auto max-w-3xl p-8">
-      <h1 className="text-2xl font-semibold">{tenant.organization.name}</h1>
-      <p className="text-sm text-muted-foreground">Projects · role {tenant.role}</p>
-      <ul className="mt-6 space-y-2">
-        {projects.ok && projects.data.length === 0 ? (
-          <li className="text-muted-foreground">No projects yet.</li>
-        ) : null}
-        {projects.ok
-          ? projects.data.map((p) => (
-              <li key={p.id} className="rounded-lg border border-border px-3 py-2">
-                {p.name}
-              </li>
-            ))
-          : (
-            <li className="text-destructive">{projects.error}</li>
-          )}
-      </ul>
-    </main>
+    <ProjectsClient
+      organizationId={tenant.organizationId}
+      orgSlug={orgSlug}
+      orgName={tenant.organization.name}
+      role={tenant.role}
+      canCreate={can(tenant.role, "create_project", "project")}
+      canDelete={can(tenant.role, "delete_project", "project")}
+      projects={projects.ok ? projects.data : []}
+    />
   );
 }
