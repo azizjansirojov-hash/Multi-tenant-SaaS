@@ -73,8 +73,9 @@ Live (next start -p 3001; port 3000 was occupied by an older build):
 ### Push result
 
 - **Remote:** `https://github.com/azizjansirojov-hash/Multi-tenant-SaaS.git` (`main`)
-- **Pushed commit:** `f4a85c049e990af3d5fbbb034dfe9278f1a65a93`
-- **Verification:** after `git fetch`, local `HEAD` and `origin/main` both resolve to `f4a85c049e990af3d5fbbb034dfe9278f1a65a93` (`git status`: `main...origin/main` clean tracking).
+- **Feature commit (translation + production-ready tree):** `f4a85c049e990af3d5fbbb034dfe9278f1a65a93`
+- **Final `HEAD` / `origin/main` (includes this report’s push hash note):** `9ddb00a171f1b0da3a0357d9234faa180e7f44cd`
+- **Verification:** `git rev-parse HEAD` and `git rev-parse origin/main` match after fetch.
 
 ---
 
