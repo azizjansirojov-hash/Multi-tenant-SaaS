@@ -25,7 +25,9 @@ describe("bcrypt Node.js runtime guards", () => {
     const files = walk(SRC).filter((f) => !f.endsWith(".test.ts"));
     const bcryptFiles = files.filter((f) => {
       const text = fs.readFileSync(f, "utf8");
-      return /from ["']bcrypt["']|require\(["']bcrypt["']\)/.test(text);
+      return /from ["']bcrypt["']|import\(["']bcrypt["']\)|require\(["']bcrypt["']\)/.test(
+        text
+      );
     });
 
     expect(bcryptFiles.length).toBeGreaterThan(0);

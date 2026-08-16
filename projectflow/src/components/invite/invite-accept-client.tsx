@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { acceptInvitation } from "@/actions/organization";
 import { Button } from "@/components/ui/button";
+import { safeInternalPath } from "@/lib/safe-redirect";
+import { copy, roleLabel } from "@/lib/copy";
 
 type Props = {
   token: string;
@@ -42,15 +44,17 @@ export function InviteAcceptClient({
     router.refresh();
   }
 
-  const callback = encodeURIComponent(`/invite/${token}`);
+  const callback = encodeURIComponent(
+    safeInternalPath(`/invite/${token}`) ?? "/"
+  );
 
   if (previewError && !preview) {
     return (
       <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center gap-4 px-6">
-        <h1 className="text-2xl font-semibold">Invitation</h1>
+        <h1 className="text-2xl font-semibold">{copy.invite.title}</h1>
         <p className="text-destructive">{previewError}</p>
         <Link href="/" className="text-sm underline">
-          Home
+          {copy.invite.home}
         </Link>
       </main>
     );
@@ -59,9 +63,9 @@ export function InviteAcceptClient({
   if (preview?.used) {
     return (
       <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center gap-4 px-6">
-        <h1 className="text-2xl font-semibold">Invitation already used</h1>
+        <h1 className="text-2xl font-semibold">{copy.invite.used}</h1>
         <p className="text-sm text-muted-foreground">
-          This invite link has already been accepted.
+          {copy.invite.usedHint}
         </p>
       </main>
     );
@@ -70,9 +74,9 @@ export function InviteAcceptClient({
   if (preview?.expired) {
     return (
       <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center gap-4 px-6">
-        <h1 className="text-2xl font-semibold">Invitation expired</h1>
+        <h1 className="text-2xl font-semibold">{copy.invite.expired}</h1>
         <p className="text-sm text-muted-foreground">
-          Ask an admin to send a new invite.
+          {copy.invite.expiredHint}
         </p>
       </main>
     );
@@ -81,11 +85,11 @@ export function InviteAcceptClient({
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center gap-6 px-6">
       <div>
-        <h1 className="text-2xl font-semibold">Join organization</h1>
+        <h1 className="text-2xl font-semibold">{copy.invite.join}</h1>
         {preview ? (
           <p className="mt-2 text-sm text-muted-foreground">
-            You are invited to <strong>{preview.orgName}</strong> as{" "}
-            <strong>{preview.role}</strong>. This invite was sent to{" "}
+            {copy.invite.invitedTo} <strong>{preview.orgName}</strong> {copy.invite.as}{" "}
+            <strong>{roleLabel(preview.role)}</strong>. {copy.invite.sentTo}{" "}
             <strong>{preview.email}</strong>.
           </p>
         ) : null}
@@ -94,29 +98,29 @@ export function InviteAcceptClient({
       {!authenticated ? (
         <div className="flex flex-col gap-3">
           <p className="text-sm text-muted-foreground">
-            Sign in or register with the invited email to accept.
+            {copy.invite.signInToAccept}
           </p>
           <Link
             href={`/login?callbackUrl=${callback}`}
             className="inline-flex h-8 items-center justify-center rounded-lg bg-primary px-2.5 text-sm font-medium text-primary-foreground"
           >
-            Sign in
+            {copy.auth.signIn}
           </Link>
           <Link
             href={`/register?callbackUrl=${callback}`}
             className="inline-flex h-8 items-center justify-center rounded-lg border border-border px-2.5 text-sm font-medium"
           >
-            Register
+            {copy.auth.register}
           </Link>
         </div>
       ) : (
         <div className="flex flex-col gap-3">
           <p className="text-sm text-muted-foreground">
-            Your account email must match the invitation email.
+            {copy.invite.emailMustMatch}
           </p>
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
           <Button type="button" onClick={onAccept} disabled={pending}>
-            {pending ? "Accepting…" : "Accept invitation"}
+            {pending ? copy.invite.accepting : copy.invite.accept}
           </Button>
         </div>
       )}

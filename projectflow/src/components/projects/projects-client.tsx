@@ -3,6 +3,7 @@
 import { useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { FolderKanban, FolderPlus } from "lucide-react";
 import {
   createProject,
   updateProject,
@@ -18,6 +19,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { EmptyState } from "@/components/empty-state";
+import { ActionErrorMessage } from "@/components/billing/plan-limit-message";
+import { copy, roleLabel } from "@/lib/copy";
 
 type ProjectItem = {
   id: string;
@@ -107,7 +111,7 @@ export function ProjectsClient({
   }
 
   async function onDelete(projectId: string) {
-    if (!confirm("Delete this project and all boards, columns, and cards?")) {
+    if (!confirm(copy.projects.deleteConfirm)) {
       return;
     }
     setError(null);
@@ -120,33 +124,28 @@ export function ProjectsClient({
   }
 
   return (
-    <main className="mx-auto max-w-3xl p-8">
+    <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold">{orgName}</h1>
-          <p className="text-sm text-muted-foreground">
-            Projects · role {role}{" "}
-            <Link
-              href={`/${orgSlug}/settings/members`}
-              className="ml-2 underline"
-            >
-              Members
-            </Link>
+          <h1 className="text-h1">{orgName}</h1>
+          <p className="text-body text-muted-foreground">
+            {copy.projects.yourProjects} · {copy.projects.role} {roleLabel(role)}
           </p>
         </div>
         {canCreate ? (
           <>
             <Button type="button" onClick={openCreate}>
-              New project
+              <FolderPlus className="size-4" aria-hidden />
+              {copy.projects.newProject}
             </Button>
             <Dialog open={createOpen} onOpenChange={setCreateOpen}>
               <DialogContent className="sm:max-w-md">
                 <DialogHeader>
-                  <DialogTitle>Create project</DialogTitle>
+                  <DialogTitle>{copy.projects.createProject}</DialogTitle>
                 </DialogHeader>
                 <form onSubmit={onCreate} className="flex flex-col gap-3">
                   <div className="space-y-1.5">
-                    <Label htmlFor="project-name">Name</Label>
+                    <Label htmlFor="project-name">{copy.common.name}</Label>
                     <Input
                       id="project-name"
                       value={name}
@@ -155,7 +154,7 @@ export function ProjectsClient({
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <Label htmlFor="project-desc">Description</Label>
+                    <Label htmlFor="project-desc">{copy.common.description}</Label>
                     <Textarea
                       id="project-desc"
                       value={description}
@@ -164,10 +163,10 @@ export function ProjectsClient({
                     />
                   </div>
                   {error ? (
-                    <p className="text-sm text-destructive">{error}</p>
+                    <ActionErrorMessage error={error} orgSlug={orgSlug} />
                   ) : null}
                   <Button type="submit" disabled={pending}>
-                    {pending ? "Creating…" : "Create"}
+                    {pending ? copy.common.creating : copy.common.create}
                   </Button>
                 </form>
               </DialogContent>
@@ -177,68 +176,66 @@ export function ProjectsClient({
       </div>
 
       {error && !createOpen && !editId ? (
-        <p className="mt-4 text-sm text-destructive">{error}</p>
+        <ActionErrorMessage error={error} orgSlug={orgSlug} />
       ) : null}
 
       {projects.length === 0 ? (
-        <div className="mt-10 rounded-xl border border-dashed border-border p-10 text-center">
-          <p className="text-lg font-medium">No projects yet</p>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Create your first project to get a default board.
-          </p>
-          {canCreate ? (
-            <Button type="button" className="mt-4" onClick={openCreate}>
-              Create project
-            </Button>
-          ) : (
-            <p className="mt-4 text-sm text-muted-foreground">
-              Ask an admin to create a project.
-            </p>
-          )}
+        <div className="surface-elevated">
+          <EmptyState
+            icon={FolderKanban}
+            title={copy.projects.noProjects}
+            description={copy.projects.noProjectsHint}
+            action={
+              canCreate ? (
+                <Button type="button" onClick={openCreate}>
+                  {copy.projects.createProject}
+                </Button>
+              ) : (
+                <p className="text-small">{copy.projects.askAdmin}</p>
+              )
+            }
+          />
         </div>
       ) : (
-        <ul className="mt-6 space-y-2">
+        <ul className="space-y-3">
           {projects.map((p) => (
-            <li
-              key={p.id}
-              className="flex flex-col gap-2 rounded-lg border border-border px-3 py-3 sm:flex-row sm:items-center sm:justify-between"
-            >
-              <div>
-                {p.firstBoardId ? (
+            <li key={p.id} className="surface-interactive group px-4 py-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
                   <Link
-                    href={`/${orgSlug}/board/${p.firstBoardId}`}
-                    className="font-medium hover:underline"
+                    href={`/${orgSlug}/projects/${p.id}`}
+                    className="text-h3 text-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     {p.name}
                   </Link>
-                ) : (
-                  <span className="font-medium">{p.name}</span>
-                )}
-                {p.description ? (
-                  <p className="text-sm text-muted-foreground">{p.description}</p>
-                ) : null}
-              </div>
-              <div className="flex gap-2">
-                {canCreate ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => openEdit(p)}
-                  >
-                    Edit
-                  </Button>
-                ) : null}
-                {canDelete ? (
-                  <Button
-                    type="button"
-                    variant="destructive"
-                    size="sm"
-                    onClick={() => onDelete(p.id)}
-                  >
-                    Delete
-                  </Button>
-                ) : null}
+                  {p.description ? (
+                    <p className="mt-0.5 text-body text-muted-foreground">
+                      {p.description}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="flex gap-2">
+                  {canCreate ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => openEdit(p)}
+                    >
+                      {copy.projects.edit}
+                    </Button>
+                  ) : null}
+                  {canDelete ? (
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      onClick={() => onDelete(p.id)}
+                    >
+                      {copy.common.delete}
+                    </Button>
+                  ) : null}
+                </div>
               </div>
             </li>
           ))}
@@ -248,11 +245,11 @@ export function ProjectsClient({
       <Dialog open={!!editId} onOpenChange={(o) => !o && setEditId(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Edit project</DialogTitle>
+            <DialogTitle>{copy.projects.editProject}</DialogTitle>
           </DialogHeader>
           <form onSubmit={onUpdate} className="flex flex-col gap-3">
             <div className="space-y-1.5">
-              <Label htmlFor="edit-name">Name</Label>
+              <Label htmlFor="edit-name">{copy.common.name}</Label>
               <Input
                 id="edit-name"
                 value={name}
@@ -261,7 +258,7 @@ export function ProjectsClient({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="edit-desc">Description</Label>
+              <Label htmlFor="edit-desc">{copy.common.description}</Label>
               <Textarea
                 id="edit-desc"
                 value={description}
@@ -271,11 +268,11 @@ export function ProjectsClient({
             </div>
             {error ? <p className="text-sm text-destructive">{error}</p> : null}
             <Button type="submit" disabled={pending}>
-              {pending ? "Saving…" : "Save"}
+              {pending ? copy.common.saving : copy.common.save}
             </Button>
           </form>
         </DialogContent>
       </Dialog>
-    </main>
+    </div>
   );
 }

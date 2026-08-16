@@ -1,4 +1,4 @@
-# LOCAL DEV ONLY — credentials are for local Docker Postgres, never reuse in production.
+# LOCAL DEV ONLY — credentials are for local Docker services, never reuse in production.
 services:
   postgres:
     image: postgres:16
@@ -21,5 +21,28 @@ services:
       timeout: 5s
       retries: 10
 
+  # LOCAL DEV ONLY — S3-compatible object storage for attachments
+  minio:
+    image: minio/minio:latest
+    container_name: syzx-minio-dev
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      # LOCAL DEV ONLY
+      MINIO_ROOT_USER: syzx_minio
+      # LOCAL DEV ONLY
+      MINIO_ROOT_PASSWORD: syzx_minio_password
+    volumes:
+      - syzx_minio:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
   syzx_pgdata:
+  syzx_minio:

@@ -1,6 +1,8 @@
 "use server";
 
+import { peekOrgId } from "@/lib/action-errors";
 import { auth } from "@/lib/auth";
+import { db } from "@/lib/db";
 import { can } from "@/lib/permissions";
 import { stripe } from "@/lib/stripe";
 import { requireMembership } from "@/lib/tenant";
@@ -9,19 +11,6 @@ import {
   createCheckoutSchema,
   zodErrorResult,
 } from "@/lib/validators";
-import { db } from "@/lib/db";
-
-function peekOrgId(input: unknown): string | null {
-  if (
-    typeof input === "object" &&
-    input !== null &&
-    "organizationId" in input &&
-    typeof (input as { organizationId: unknown }).organizationId === "string"
-  ) {
-    return (input as { organizationId: string }).organizationId;
-  }
-  return null;
-}
 
 export async function createCheckoutSession(
   input: unknown
@@ -86,4 +75,53 @@ export async function createCheckoutSession(
   }
 
   return { ok: true, data: { url: checkout.url } };
+}
+
+export async function createBillingPortalSession(
+  input: unknown
+): Promise<ActionResult<{ url: string }>> {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return { ok: false, error: "Unauthorized" };
+  }
+
+  const orgId = peekOrgId(input);
+  if (!orgId) {
+    return {
+      ok: false,
+      error: "Validation failed",
+      fieldErrors: { organizationId: ["Required"] },
+    };
+  }
+
+  const tenant = await requireMembership(orgId);
+  if (!can(tenant.role, "manage_billing", "billing")) {
+    return { ok: false, error: "Access denied" };
+  }
+
+  const parsed = createCheckoutSchema.safeParse(input);
+  if (!parsed.success) {
+    return zodErrorResult(parsed.error);
+  }
+
+  if (!process.env.STRIPE_SECRET_KEY || !stripe) {
+    return { ok: false, error: "Stripe is not configured" };
+  }
+
+  const customerId = tenant.organization.stripeCustomerId;
+  if (!customerId) {
+    return { ok: false, error: "No billing account yet. Upgrade first." };
+  }
+
+  const baseUrl = process.env.AUTH_URL ?? "http://localhost:3000";
+  const portal = await stripe.billingPortal.sessions.create({
+    customer: customerId,
+    return_url: `${baseUrl}/${tenant.organization.slug}/settings/billing`,
+  });
+
+  if (!portal.url) {
+    return { ok: false, error: "Failed to create billing portal session" };
+  }
+
+  return { ok: true, data: { url: portal.url } };
 }

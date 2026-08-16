@@ -1,9 +1,16 @@
 import { z } from "zod";
-import { Priority, Role } from "@/generated/prisma/client";
+import { Priority, Role } from "@/types/enums";
+import { normalizeEmail } from "@/lib/email-normalize";
+
+const emailField = z
+  .string()
+  .trim()
+  .email("Invalid email")
+  .transform(normalizeEmail);
 
 export const registerSchema = z.object({
   name: z.string().trim().min(1, "Name is required").max(100),
-  email: z.string().trim().email("Invalid email"),
+  email: emailField,
   password: z.string().min(8, "Password must be at least 8 characters").max(128),
   organizationName: z
     .string()
@@ -13,8 +20,8 @@ export const registerSchema = z.object({
 });
 
 export const loginSchema = z.object({
-  email: z.string().trim().email("Invalid email"),
-  password: z.string().min(1, "Password is required"),
+  email: emailField,
+  password: z.string().min(1, "Password is required").max(128),
 });
 
 export const createOrganizationSchema = z.object({
@@ -35,7 +42,7 @@ export const updateOrganizationSchema = z.object({
 
 export const inviteMemberSchema = z.object({
   organizationId: z.string().min(1),
-  email: z.string().trim().email(),
+  email: emailField,
   role: z.nativeEnum(Role).default(Role.MEMBER),
 });
 
@@ -175,6 +182,107 @@ export const deleteCardSchema = z.object({
 
 export const createCheckoutSchema = z.object({
   organizationId: z.string().min(1),
+});
+
+export const listBoardsForProjectSchema = z.object({
+  organizationId: z.string().min(1),
+  projectId: z.string().min(1),
+});
+
+export const listPendingInvitationsSchema = z.object({
+  organizationId: z.string().min(1),
+});
+
+export const revokeInvitationSchema = z.object({
+  organizationId: z.string().min(1),
+  invitationId: z.string().min(1),
+});
+
+export const leaveOrganizationSchema = z.object({
+  organizationId: z.string().min(1),
+});
+
+export const deleteOrganizationSchema = z.object({
+  organizationId: z.string().min(1),
+  confirmName: z.string().trim().min(1, "Type the organization name to confirm"),
+});
+
+export const createCommentSchema = z.object({
+  organizationId: z.string().min(1),
+  cardId: z.string().min(1),
+  body: z.string().trim().min(1, "Comment is required").max(5000),
+});
+
+export const listCommentsSchema = z.object({
+  organizationId: z.string().min(1),
+  cardId: z.string().min(1),
+});
+
+export const softDeleteCommentSchema = z.object({
+  organizationId: z.string().min(1),
+  commentId: z.string().min(1),
+});
+
+export const listNotificationsSchema = z.object({
+  organizationId: z.string().min(1),
+  limit: z.number().int().min(1).max(100).optional(),
+  unreadOnly: z.boolean().optional(),
+});
+
+export const markNotificationReadSchema = z.object({
+  organizationId: z.string().min(1),
+  notificationId: z.string().min(1),
+});
+
+export const markAllNotificationsReadSchema = z.object({
+  organizationId: z.string().min(1),
+});
+
+export const createAttachmentUploadSchema = z.object({
+  organizationId: z.string().min(1),
+  cardId: z.string().min(1),
+  fileName: z.string().trim().min(1).max(255),
+  mimeType: z.string().trim().min(1).max(128),
+  sizeBytes: z.number().int().positive().max(10 * 1024 * 1024),
+});
+
+export const confirmAttachmentSchema = z.object({
+  organizationId: z.string().min(1),
+  attachmentId: z.string().min(1),
+});
+
+export const listAttachmentsSchema = z.object({
+  organizationId: z.string().min(1),
+  cardId: z.string().min(1),
+});
+
+export const deleteAttachmentSchema = z.object({
+  organizationId: z.string().min(1),
+  attachmentId: z.string().min(1),
+});
+
+export const getAttachmentDownloadSchema = z.object({
+  organizationId: z.string().min(1),
+  attachmentId: z.string().min(1),
+});
+
+export const listActivitySchema = z.object({
+  organizationId: z.string().min(1),
+  projectId: z.string().min(1).optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+  cursor: z.string().optional(),
+});
+
+export const searchCardsSchema = z.object({
+  organizationId: z.string().min(1),
+  boardId: z.string().min(1).optional(),
+  projectId: z.string().min(1).optional(),
+  query: z.string().trim().max(200).optional(),
+  assigneeId: z.string().min(1).nullable().optional(),
+  priority: z.nativeEnum(Priority).optional(),
+  labels: z.array(z.string().max(50)).max(20).optional(),
+  dueFrom: z.coerce.date().optional(),
+  dueTo: z.coerce.date().optional(),
 });
 
 export type ActionResult<T = unknown> =

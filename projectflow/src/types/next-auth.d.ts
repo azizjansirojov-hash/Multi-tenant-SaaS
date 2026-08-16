@@ -20,6 +20,8 @@ declare module "next-auth" {
 declare module "next-auth/jwt" {
   interface JWT {
     sessionVersion?: number;
+    /** Unix seconds when Node last compared sessionVersion to Postgres. */
+    sessionCheckedAt?: number;
     error?: "SessionInvalidated";
   }
 }

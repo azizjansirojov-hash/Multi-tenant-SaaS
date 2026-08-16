@@ -8,6 +8,10 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],
+    exclude: ["src/**/*.e2e.test.ts"],
+    env: {
+      AUTH_SECRET: process.env.AUTH_SECRET || "vitest-auth-secret",
+    },
     coverage: {
       provider: "v8",
       reporter: ["text", "text-summary"],

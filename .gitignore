@@ -1,8 +1,11 @@
 # Repo-root ignores (projectflow/.gitignore also applies under that tree)
 .env
 .env*.local
+!.env.example
 node_modules/
 .next/
 .DS_Store
 *.pem
 .vercel
+*.log
+.cursor/

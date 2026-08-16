@@ -1,9 +1,14 @@
 "use server";
 
 import { auth } from "@/lib/auth";
+import { recordActivity } from "@/lib/activity";
+import { peekOrgId } from "@/lib/action-errors";
+import { deleteStorageObjectsForAttachments } from "@/lib/attachment-lifecycle";
 import { db } from "@/lib/db";
 import { planMove } from "@/lib/fractional-index";
 import { can } from "@/lib/permissions";
+import { assertWithinBoardLimit } from "@/lib/plan";
+import { publishRealtime } from "@/lib/realtime-bus";
 import { requireMembership } from "@/lib/tenant";
 import {
   ActionResult,
@@ -11,6 +16,7 @@ import {
   createColumnSchema,
   deleteBoardSchema,
   deleteColumnSchema,
+  listBoardsForProjectSchema,
   moveColumnSchema,
   reorderColumnSchema,
   updateBoardSchema,
@@ -18,18 +24,6 @@ import {
   zodErrorResult,
 } from "@/lib/validators";
 import { Priority } from "@/generated/prisma/client";
-
-function peekOrgId(input: unknown): string | null {
-  if (
-    typeof input === "object" &&
-    input !== null &&
-    "organizationId" in input &&
-    typeof (input as { organizationId: unknown }).organizationId === "string"
-  ) {
-    return (input as { organizationId: string }).organizationId;
-  }
-  return null;
-}
 
 export async function createBoard(
   input: unknown
@@ -68,12 +62,37 @@ export async function createBoard(
     return { ok: false, error: "Project not found" };
   }
 
-  const board = await db.board.create({
-    data: {
-      projectId: project.id,
-      name: parsed.data.name,
-      position: parsed.data.position ?? 0,
-    },
+  const boardCount = await db.board.count({
+    where: { project: { organizationId: tenant.organizationId } },
+  });
+  const boardCap = assertWithinBoardLimit(tenant.organization, boardCount);
+  if (boardCap) return boardCap;
+
+  const board = await db.$transaction(async (tx) => {
+    const created = await tx.board.create({
+      data: {
+        projectId: project.id,
+        name: parsed.data.name,
+        position: parsed.data.position ?? 0,
+      },
+    });
+    await recordActivity({
+      tx,
+      organizationId: tenant.organizationId,
+      actorId: session.user.id,
+      action: "CREATED",
+      entityType: "BOARD",
+      entityId: created.id,
+      summary: `Created board "${created.name}"`,
+    });
+    return created;
+  });
+
+  publishRealtime({
+    type: "board.updated",
+    organizationId: tenant.organizationId,
+    boardId: board.id,
+    payload: { boardId: board.id },
   });
 
   return { ok: true, data: { id: board.id } };
@@ -116,9 +135,27 @@ export async function updateBoard(
     return { ok: false, error: "Board not found" };
   }
 
-  const board = await db.board.update({
-    where: { id: existing.id },
-    data: { name: parsed.data.name },
+  const board = await db.$transaction(async (tx) => {
+    const updated = await tx.board.update({
+      where: { id: existing.id },
+      data: { name: parsed.data.name },
+    });
+    await recordActivity({
+      tx,
+      organizationId: tenant.organizationId,
+      actorId: session.user.id,
+      action: "UPDATED",
+      entityType: "BOARD",
+      entityId: updated.id,
+      summary: `Renamed board to "${updated.name}"`,
+    });
+    return updated;
+  });
+
+  publishRealtime({
+    type: "board.updated",
+    organizationId: tenant.organizationId,
+    boardId: board.id,
   });
 
   return { ok: true, data: { id: board.id } };
@@ -161,7 +198,30 @@ export async function deleteBoard(
     return { ok: false, error: "Board not found" };
   }
 
-  await db.board.delete({ where: { id: existing.id } });
+  const blobs = await deleteStorageObjectsForAttachments({
+    card: { column: { boardId: existing.id } },
+  });
+  if (!blobs.ok) return blobs;
+
+  await db.$transaction(async (tx) => {
+    await tx.board.delete({ where: { id: existing.id } });
+    await recordActivity({
+      tx,
+      organizationId: tenant.organizationId,
+      actorId: session.user.id,
+      action: "DELETED",
+      entityType: "BOARD",
+      entityId: existing.id,
+      summary: `Deleted board "${existing.name}"`,
+    });
+  });
+
+  publishRealtime({
+    type: "board.updated",
+    organizationId: tenant.organizationId,
+    boardId: existing.id,
+  });
+
   return { ok: true, data: { id: existing.id } };
 }
 
@@ -212,12 +272,31 @@ export async function createColumn(
     position = last ? last.position + 1 : 0;
   }
 
-  const column = await db.column.create({
-    data: {
-      boardId: board.id,
-      name: parsed.data.name,
-      position,
-    },
+  const column = await db.$transaction(async (tx) => {
+    const created = await tx.column.create({
+      data: {
+        boardId: board.id,
+        name: parsed.data.name,
+        position,
+      },
+    });
+    await recordActivity({
+      tx,
+      organizationId: tenant.organizationId,
+      actorId: session.user.id,
+      action: "CREATED",
+      entityType: "COLUMN",
+      entityId: created.id,
+      summary: `Created column "${created.name}"`,
+      metadata: { boardId: board.id },
+    });
+    return created;
+  });
+
+  publishRealtime({
+    type: "board.updated",
+    organizationId: tenant.organizationId,
+    boardId: board.id,
   });
 
   return { ok: true, data: { id: column.id } };
@@ -260,9 +339,28 @@ export async function updateColumn(
     return { ok: false, error: "Column not found" };
   }
 
-  const column = await db.column.update({
-    where: { id: existing.id },
-    data: { name: parsed.data.name },
+  const column = await db.$transaction(async (tx) => {
+    const updated = await tx.column.update({
+      where: { id: existing.id },
+      data: { name: parsed.data.name },
+    });
+    await recordActivity({
+      tx,
+      organizationId: tenant.organizationId,
+      actorId: session.user.id,
+      action: "UPDATED",
+      entityType: "COLUMN",
+      entityId: updated.id,
+      summary: `Renamed column to "${updated.name}"`,
+      metadata: { boardId: existing.boardId },
+    });
+    return updated;
+  });
+
+  publishRealtime({
+    type: "board.updated",
+    organizationId: tenant.organizationId,
+    boardId: existing.boardId,
   });
 
   return { ok: true, data: { id: column.id } };
@@ -305,7 +403,31 @@ export async function deleteColumn(
     return { ok: false, error: "Column not found" };
   }
 
-  await db.column.delete({ where: { id: existing.id } });
+  const blobs = await deleteStorageObjectsForAttachments({
+    card: { columnId: existing.id },
+  });
+  if (!blobs.ok) return blobs;
+
+  await db.$transaction(async (tx) => {
+    await tx.column.delete({ where: { id: existing.id } });
+    await recordActivity({
+      tx,
+      organizationId: tenant.organizationId,
+      actorId: session.user.id,
+      action: "DELETED",
+      entityType: "COLUMN",
+      entityId: existing.id,
+      summary: `Deleted column "${existing.name}"`,
+      metadata: { boardId: existing.boardId },
+    });
+  });
+
+  publishRealtime({
+    type: "board.updated",
+    organizationId: tenant.organizationId,
+    boardId: existing.boardId,
+  });
+
   return { ok: true, data: { id: existing.id } };
 }
 
@@ -364,16 +486,32 @@ export async function reorderColumn(
   }
 
   // Swap positions with neighbor (Float positions preserved for future DnD)
-  await db.$transaction([
-    db.column.update({
+  await db.$transaction(async (tx) => {
+    await tx.column.update({
       where: { id: existing.id },
       data: { position: swapWith.position },
-    }),
-    db.column.update({
+    });
+    await tx.column.update({
       where: { id: swapWith.id },
       data: { position: existing.position },
-    }),
-  ]);
+    });
+    await recordActivity({
+      tx,
+      organizationId: tenant.organizationId,
+      actorId: session.user.id,
+      action: "MOVED",
+      entityType: "COLUMN",
+      entityId: existing.id,
+      summary: `Reordered column "${existing.name}"`,
+      metadata: { boardId: existing.boardId },
+    });
+  });
+
+  publishRealtime({
+    type: "board.updated",
+    organizationId: tenant.organizationId,
+    boardId: existing.boardId,
+  });
 
   return {
     ok: true,
@@ -432,9 +570,26 @@ export async function moveColumn(
   );
 
   if (plan.kind === "single") {
-    await db.column.update({
-      where: { id: existing.id },
-      data: { position: plan.position },
+    await db.$transaction(async (tx) => {
+      await tx.column.update({
+        where: { id: existing.id },
+        data: { position: plan.position },
+      });
+      await recordActivity({
+        tx,
+        organizationId: tenant.organizationId,
+        actorId: session.user.id,
+        action: "MOVED",
+        entityType: "COLUMN",
+        entityId: existing.id,
+        summary: `Moved column "${existing.name}"`,
+        metadata: { boardId: existing.boardId },
+      });
+    });
+    publishRealtime({
+      type: "board.updated",
+      organizationId: tenant.organizationId,
+      boardId: existing.boardId,
     });
     return {
       ok: true,
@@ -442,14 +597,30 @@ export async function moveColumn(
     };
   }
 
-  await db.$transaction(
-    plan.updates.map((u) =>
-      db.column.update({
+  await db.$transaction(async (tx) => {
+    for (const u of plan.updates) {
+      await tx.column.update({
         where: { id: u.id },
         data: { position: u.position },
-      })
-    )
-  );
+      });
+    }
+    await recordActivity({
+      tx,
+      organizationId: tenant.organizationId,
+      actorId: session.user.id,
+      action: "MOVED",
+      entityType: "COLUMN",
+      entityId: existing.id,
+      summary: `Moved column "${existing.name}"`,
+      metadata: { boardId: existing.boardId },
+    });
+  });
+
+  publishRealtime({
+    type: "board.updated",
+    organizationId: tenant.organizationId,
+    boardId: existing.boardId,
+  });
 
   const moved = plan.updates.find((u) => u.id === existing.id)!;
   return {
@@ -576,4 +747,60 @@ export async function getFirstBoardForProject(
   });
 
   return { ok: true, data: board };
+}
+
+export type ProjectBoardItem = {
+  id: string;
+  name: string;
+  position: number;
+};
+
+export async function listBoardsForProject(
+  input: unknown
+): Promise<ActionResult<ProjectBoardItem[]>> {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return { ok: false, error: "Unauthorized" };
+  }
+
+  const orgId = peekOrgId(input);
+  if (!orgId) {
+    return {
+      ok: false,
+      error: "Validation failed",
+      fieldErrors: { organizationId: ["Required"] },
+    };
+  }
+
+  const tenant = await requireMembership(orgId);
+  if (!can(tenant.role, "view_card", "card")) {
+    return { ok: false, error: "Access denied" };
+  }
+
+  const parsed = listBoardsForProjectSchema.safeParse(input);
+  if (!parsed.success) {
+    return zodErrorResult(parsed.error);
+  }
+
+  const project = await db.project.findFirst({
+    where: {
+      id: parsed.data.projectId,
+      organizationId: tenant.organizationId,
+    },
+    select: { id: true },
+  });
+  if (!project) {
+    return { ok: false, error: "Project not found" };
+  }
+
+  const boards = await db.board.findMany({
+    where: {
+      projectId: project.id,
+      project: { organizationId: tenant.organizationId },
+    },
+    select: { id: true, name: true, position: true },
+    orderBy: { position: "asc" },
+  });
+
+  return { ok: true, data: boards };
 }

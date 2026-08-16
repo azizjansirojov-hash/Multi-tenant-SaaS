@@ -3,12 +3,13 @@
 import {
   useState,
   useEffect,
+  useCallback,
   FormEvent,
   type CSSProperties,
   type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
+import { Columns3, SearchX } from "lucide-react";
 import {
   DndContext,
   DragOverlay,
@@ -30,6 +31,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Priority, type Role } from "@/types/enums";
+import { copy, priorityLabel } from "@/lib/copy";
 import {
   createColumn,
   updateColumn,
@@ -53,6 +55,29 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { CommentThread } from "@/components/comments/comment-thread";
+import { AttachmentZone } from "@/components/attachments/attachment-zone";
+import { ActivityFeed } from "@/components/activity/activity-feed";
+import {
+  BoardFilters,
+  type BoardFilterState,
+} from "@/components/board/board-filters";
+import { EmptyState } from "@/components/empty-state";
+import { useRealtime } from "@/hooks/use-realtime";
+import { can as canPerm } from "@/lib/permissions";
+import { cn } from "@/lib/utils";
+
+function priorityBadgeClass(priority: string) {
+  switch (priority) {
+    case Priority.URGENT:
+    case Priority.HIGH:
+      return "border-primary/40 bg-primary/15 text-primary";
+    case Priority.MEDIUM:
+      return "border-primary/25 bg-primary/8 text-foreground";
+    default:
+      return "border-border bg-muted text-muted-foreground";
+  }
+}
 
 type Props = {
   organizationId: string;
@@ -60,6 +85,7 @@ type Props = {
   role: Role;
   board: BoardDetail;
   members: MemberListItem[];
+  currentUserId: string;
 };
 
 function parseLabels(raw: string): string[] {
@@ -155,9 +181,14 @@ function SortableCardShell({
 function CardFace({ card }: { card: BoardCard }) {
   return (
     <>
-      <p className="font-medium">{card.title}</p>
-      <div className="mt-1 flex flex-wrap gap-1">
-        <Badge variant="secondary">{card.priority}</Badge>
+      <p className="text-h3">{card.title}</p>
+      <div className="mt-1.5 flex flex-wrap gap-1">
+        <Badge
+          variant="outline"
+          className={cn(priorityBadgeClass(card.priority))}
+        >
+          {card.priority}
+        </Badge>
         {card.assignee ? (
           <Badge variant="outline">
             {card.assignee.name || card.assignee.email}
@@ -179,11 +210,14 @@ export function BoardClient({
   role,
   board: initialBoard,
   members,
+  currentUserId,
 }: Props) {
   const router = useRouter();
   const canManageBoard = role === "OWNER" || role === "ADMIN";
   const canEditCards =
     role === "OWNER" || role === "ADMIN" || role === "MEMBER";
+  const canComment = canPerm(role, "create_comment", "comment");
+  const canModerateComments = canPerm(role, "delete_comment", "comment");
 
   const [columns, setColumns] = useState<BoardColumn[]>(initialBoard.columns);
   const [error, setError] = useState<string | null>(null);
@@ -191,6 +225,7 @@ export function BoardClient({
   const [columnName, setColumnName] = useState("");
   const [pending, setPending] = useState(false);
   const [activeId, setActiveId] = useState<UniqueIdentifier | null>(null);
+  const [filterIds, setFilterIds] = useState<string[] | null>(null);
 
   const [cardDialog, setCardDialog] = useState<{
     mode: "create" | "edit";
@@ -204,10 +239,19 @@ export function BoardClient({
   const [priority, setPriority] = useState<Priority>(Priority.MEDIUM);
   const [labels, setLabels] = useState("");
 
+  useRealtime({
+    organizationId,
+    boardId: initialBoard.id,
+  });
+
   useEffect(() => {
     setColumns(initialBoard.columns);
     setBoardName(initialBoard.name);
   }, [initialBoard]);
+
+  const onFilterChange = useCallback((state: BoardFilterState) => {
+    setFilterIds(state.matchingIds);
+  }, []);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } })
@@ -266,7 +310,7 @@ export function BoardClient({
 
   async function onDeleteColumn(columnId: string) {
     if (!canManageBoard) return;
-    if (!confirm("Delete this column and all its cards?")) return;
+    if (!confirm(copy.board.deleteColumnConfirm)) return;
     const result = await deleteColumn({ organizationId, columnId });
     if (!result.ok) {
       setError(result.error);
@@ -345,7 +389,7 @@ export function BoardClient({
 
   async function onDeleteCard(cardId: string) {
     if (!canEditCards) return;
-    if (!confirm("Delete this card?")) return;
+    if (!confirm(copy.board.deleteCardConfirm)) return;
     const result = await deleteCard({ organizationId, cardId });
     if (!result.ok) {
       setError(result.error);
@@ -538,26 +582,29 @@ export function BoardClient({
 
   const dndEnabled = canEditCards || canManageBoard;
 
+  const visibleCardCount =
+    filterIds === null
+      ? columns.reduce((n, c) => n + c.cards.length, 0)
+      : filterIds.length;
+  const showFilterEmpty =
+    columns.length > 0 && filterIds !== null && visibleCardCount === 0;
+
   return (
-    <div className="flex min-h-screen flex-col">
-      <header className="border-b border-border px-6 py-4">
+    <div className="flex h-full min-h-[calc(100vh-3.5rem)] flex-col">
+      <header className="border-b border-border px-4 py-4 sm:px-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <Link
-              href={`/${orgSlug}/projects`}
-              className="text-sm text-muted-foreground hover:text-foreground"
-            >
-              ← {initialBoard.projectName}
-            </Link>
+          <div className="min-w-0 space-y-1">
+            <p className="text-small">{initialBoard.projectName}</p>
             {canManageBoard ? (
               <form
                 onSubmit={onRenameBoard}
-                className="mt-1 flex items-center gap-2"
+                className="flex flex-wrap items-center gap-2"
               >
                 <Input
                   value={boardName}
                   onChange={(e) => setBoardName(e.target.value)}
-                  className="max-w-xs text-lg font-semibold"
+                  className="max-w-xs text-h2"
+                  aria-label={copy.board.boardName}
                 />
                 <Button
                   type="submit"
@@ -565,32 +612,45 @@ export function BoardClient({
                   variant="outline"
                   disabled={pending}
                 >
-                  Rename
+                  {copy.board.rename}
                 </Button>
               </form>
             ) : (
-              <h1 className="text-2xl font-semibold">{initialBoard.name}</h1>
+              <h1 className="text-h1">{initialBoard.name}</h1>
             )}
           </div>
-          {canManageBoard ? (
-            <form onSubmit={onAddColumn} className="flex items-end gap-2">
-              <div className="space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
+            {canManageBoard ? (
+              <form onSubmit={onAddColumn} className="flex items-center gap-2">
                 <Label htmlFor="new-col" className="sr-only">
-                  Column name
+                  {copy.board.columnName}
                 </Label>
                 <Input
                   id="new-col"
-                  placeholder="New column"
+                  placeholder={copy.board.newColumn}
                   value={columnName}
                   onChange={(e) => setColumnName(e.target.value)}
                   required
+                  className="w-40"
                 />
-              </div>
-              <Button type="submit" disabled={pending}>
-                Add column
-              </Button>
-            </form>
-          ) : null}
+                <Button type="submit" disabled={pending}>
+                  {copy.board.addColumn}
+                </Button>
+              </form>
+            ) : null}
+            <ActivityFeed
+              organizationId={organizationId}
+              projectId={initialBoard.projectId}
+            />
+          </div>
+        </div>
+        <div className="mt-4">
+          <BoardFilters
+            organizationId={organizationId}
+            boardId={initialBoard.id}
+            members={members}
+            onFilterChange={onFilterChange}
+          />
         </div>
         {error ? (
           <p className="mt-2 text-sm text-destructive">{error}</p>
@@ -604,13 +664,38 @@ export function BoardClient({
         onDragOver={onDragOver}
         onDragEnd={onDragEnd}
       >
-        <div className="flex flex-1 gap-4 overflow-x-auto p-6">
+        <div className="flex flex-1 gap-4 overflow-x-auto p-4 sm:p-6">
           {columns.length === 0 ? (
-            <p className="text-muted-foreground">
-              No columns yet.
-              {canManageBoard ? " Add a column to start." : null}
-            </p>
+            <div className="surface-elevated m-auto w-full max-w-md">
+              <EmptyState
+                icon={Columns3}
+                title={copy.board.noColumns}
+                description={copy.board.noColumnsHint}
+                action={
+                  canManageBoard ? (
+                    <Button
+                      type="button"
+                      onClick={() => {
+                        const el = document.getElementById("new-col");
+                        el?.focus();
+                      }}
+                    >
+                      {copy.board.addFirstColumn}
+                    </Button>
+                  ) : undefined
+                }
+              />
+            </div>
           ) : null}
+          {showFilterEmpty ? (
+            <div className="surface-elevated m-auto w-full max-w-md">
+              <EmptyState
+                icon={SearchX}
+                title={copy.board.noMatchingCards}
+                description={copy.board.noMatchingHint}
+              />
+            </div>
+          ) : (
           <SortableContext
             items={columns.map((c) => c.id)}
             strategy={horizontalListSortingStrategy}
@@ -625,7 +710,7 @@ export function BoardClient({
                   <div
                     ref={setNodeRef}
                     style={style}
-                    className="flex w-72 shrink-0 flex-col rounded-xl border border-border bg-muted/30"
+                    className="surface-elevated flex w-72 shrink-0 flex-col bg-muted/20"
                   >
                     <div className="flex items-start justify-between gap-2 border-b border-border p-3">
                       <div className="min-w-0 flex-1">
@@ -650,7 +735,7 @@ export function BoardClient({
                             type="button"
                             size="icon-xs"
                             variant="ghost"
-                            aria-label="Drag column"
+                            aria-label={copy.board.dragColumn}
                             className="cursor-grab active:cursor-grabbing"
                             {...attributes}
                             {...listeners}
@@ -662,7 +747,7 @@ export function BoardClient({
                             size="icon-xs"
                             variant="destructive"
                             onClick={() => onDeleteColumn(col.id)}
-                            aria-label="Delete column"
+                            aria-label={copy.board.deleteColumn}
                           >
                             ×
                           </Button>
@@ -671,11 +756,21 @@ export function BoardClient({
                     </div>
 
                     <SortableContext
-                      items={col.cards.map((c) => c.id)}
+                      items={col.cards
+                        .filter(
+                          (card) =>
+                            filterIds === null || filterIds.includes(card.id)
+                        )
+                        .map((c) => c.id)}
                       strategy={verticalListSortingStrategy}
                     >
                       <ul className="flex min-h-12 flex-1 flex-col gap-2 p-3">
-                        {col.cards.map((card) => (
+                        {col.cards
+                          .filter(
+                            (card) =>
+                              filterIds === null || filterIds.includes(card.id)
+                          )
+                          .map((card) => (
                           <SortableCardShell
                             key={card.id}
                             id={card.id}
@@ -691,14 +786,14 @@ export function BoardClient({
                               <li
                                 ref={cardRef}
                                 style={cardStyle}
-                                className="rounded-lg border border-border bg-background p-3 shadow-sm"
+                                className="surface-interactive rounded-lg bg-card p-3"
                               >
                                 <div className="flex gap-2">
                                   {canEditCards ? (
                                     <button
                                       type="button"
                                       className="mt-0.5 cursor-grab text-muted-foreground active:cursor-grabbing"
-                                      aria-label="Drag card"
+                                      aria-label={copy.board.dragCard}
                                       {...cardAttrs}
                                       {...cardListeners}
                                     >
@@ -729,7 +824,7 @@ export function BoardClient({
                           className="w-full"
                           onClick={() => openCreateCard(col.id)}
                         >
-                          Add card
+                          {copy.board.addCard}
                         </Button>
                       </div>
                     ) : null}
@@ -738,16 +833,17 @@ export function BoardClient({
               </SortableColumnShell>
             ))}
           </SortableContext>
+          )}
         </div>
 
         <DragOverlay>
           {activeCard ? (
-            <div className="w-72 rounded-lg border border-border bg-background p-3 shadow-lg">
+            <div className="surface-elevated w-72 bg-card p-3 shadow-lg">
               <CardFace card={activeCard} />
             </div>
           ) : activeColumn ? (
-            <div className="w-72 rounded-xl border border-border bg-muted/80 p-3 shadow-lg">
-              <p className="font-medium">{activeColumn.name}</p>
+            <div className="surface-elevated w-72 bg-muted/80 p-3 shadow-lg">
+              <p className="text-h3">{activeColumn.name}</p>
             </div>
           ) : null}
         </DragOverlay>
@@ -757,15 +853,15 @@ export function BoardClient({
         open={!!cardDialog}
         onOpenChange={(o) => !o && setCardDialog(null)}
       >
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>
-              {cardDialog?.mode === "edit" ? "Edit card" : "New card"}
+              {cardDialog?.mode === "edit" ? copy.board.editCard : copy.board.newCard}
             </DialogTitle>
           </DialogHeader>
           <form onSubmit={onSaveCard} className="flex flex-col gap-3">
             <div className="space-y-1.5">
-              <Label htmlFor="card-title">Title</Label>
+              <Label htmlFor="card-title">{copy.board.title}</Label>
               <Input
                 id="card-title"
                 value={title}
@@ -775,7 +871,7 @@ export function BoardClient({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="card-desc">Description</Label>
+              <Label htmlFor="card-desc">{copy.common.description}</Label>
               <Textarea
                 id="card-desc"
                 value={description}
@@ -785,7 +881,7 @@ export function BoardClient({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="card-assignee">Assignee</Label>
+              <Label htmlFor="card-assignee">{copy.board.assignee}</Label>
               <select
                 id="card-assignee"
                 className="flex h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
@@ -793,7 +889,7 @@ export function BoardClient({
                 onChange={(e) => setAssigneeId(e.target.value)}
                 disabled={!canEditCards}
               >
-                <option value="">Unassigned</option>
+                <option value="">{copy.board.unassigned}</option>
                 {members.map((m) => (
                   <option key={m.user.id} value={m.user.id}>
                     {m.user.name || m.user.email}
@@ -803,7 +899,7 @@ export function BoardClient({
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor="card-due">Due date</Label>
+                <Label htmlFor="card-due">{copy.board.dueDate}</Label>
                 <Input
                   id="card-due"
                   type="date"
@@ -813,7 +909,7 @@ export function BoardClient({
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="card-priority">Priority</Label>
+                <Label htmlFor="card-priority">{copy.board.priority}</Label>
                 <select
                   id="card-priority"
                   className="flex h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
@@ -823,19 +919,19 @@ export function BoardClient({
                 >
                   {Object.values(Priority).map((p) => (
                     <option key={p} value={p}>
-                      {p}
+                      {priorityLabel(p)}
                     </option>
                   ))}
                 </select>
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="card-labels">Labels (comma-separated)</Label>
+              <Label htmlFor="card-labels">{copy.board.labels}</Label>
               <Input
                 id="card-labels"
                 value={labels}
                 onChange={(e) => setLabels(e.target.value)}
-                placeholder="bug, frontend"
+                placeholder={copy.board.labelsPlaceholder}
                 disabled={!canEditCards}
               />
             </div>
@@ -843,7 +939,7 @@ export function BoardClient({
             {canEditCards ? (
               <div className="flex gap-2">
                 <Button type="submit" disabled={pending} className="flex-1">
-                  {pending ? "Saving…" : "Save"}
+                  {pending ? copy.common.saving : copy.common.save}
                 </Button>
                 {cardDialog?.mode === "edit" && cardDialog.card ? (
                   <Button
@@ -851,12 +947,29 @@ export function BoardClient({
                     variant="destructive"
                     onClick={() => onDeleteCard(cardDialog.card!.id)}
                   >
-                    Delete
+                    {copy.common.delete}
                   </Button>
                 ) : null}
               </div>
             ) : null}
           </form>
+          {cardDialog?.mode === "edit" && cardDialog.card ? (
+            <>
+              <CommentThread
+                organizationId={organizationId}
+                cardId={cardDialog.card.id}
+                currentUserId={currentUserId}
+                canComment={canComment}
+                canModerate={canModerateComments}
+              />
+              <AttachmentZone
+                organizationId={organizationId}
+                orgSlug={orgSlug}
+                cardId={cardDialog.card.id}
+                canEdit={canEditCards}
+              />
+            </>
+          ) : null}
         </DialogContent>
       </Dialog>
     </div>

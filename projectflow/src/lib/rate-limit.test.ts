@@ -193,4 +193,73 @@ describe("rate-limit", () => {
     expect(result?.ok).toBe(false);
     expect(result?.error).toMatch(/Too many attempts/);
   });
+
+  it("allows again after the fixed window advances (reset)", async () => {
+    const key = "login:email:reset@example.com";
+    vi.mocked(db.rateLimitBucket.findUnique).mockImplementation(((args: {
+      where: { key_windowStart: { windowStart: Date } };
+    }) => {
+      const ws = args.where.key_windowStart.windowStart.getTime();
+      // Old window: exhausted; new window: empty
+      if (ws === windowStart.getTime()) {
+        return Promise.resolve({
+          id: "bucket-old",
+          key,
+          windowStart,
+          count: 5,
+          updatedAt: fixedNow,
+        });
+      }
+      return Promise.resolve(null);
+    }) as never);
+    vi.mocked(db.rateLimitBucket.create).mockImplementation((() => {
+      return Promise.resolve({
+        id: "bucket-new",
+        key,
+        windowStart: new Date(windowStart.getTime() + windowMs),
+        count: 1,
+        updatedAt: fixedNow,
+      });
+    }) as never);
+
+    const blocked = await checkRateLimit({
+      key,
+      limit: 5,
+      windowMs,
+      now: fixedNow,
+    });
+    expect(blocked.allowed).toBe(false);
+
+    const later = new Date(fixedNow.getTime() + windowMs);
+    const allowed = await checkRateLimit({
+      key,
+      limit: 5,
+      windowMs,
+      now: later,
+    });
+    expect(allowed.allowed).toBe(true);
+    expect(db.rateLimitBucket.create).toHaveBeenCalled();
+  });
+
+  it("enforceRegisterRateLimit / changePassword / invite share same block pattern", async () => {
+    const {
+      enforceRegisterRateLimit,
+      enforceChangePasswordRateLimit,
+      enforceInviteRateLimit,
+    } = await import("@/lib/rate-limit");
+
+    vi.mocked(db.rateLimitBucket.findUnique).mockResolvedValue({
+      id: "b",
+      key: "x",
+      windowStart,
+      count: 999,
+      updatedAt: fixedNow,
+    } as never);
+
+    expect(await enforceRegisterRateLimit()).toMatchObject({ ok: false });
+    expect(await enforceChangePasswordRateLimit("u1")).toMatchObject({
+      ok: false,
+    });
+    expect(await enforceInviteRateLimit("org1")).toMatchObject({ ok: false });
+  });
 });

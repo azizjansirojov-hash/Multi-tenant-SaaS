@@ -49,6 +49,7 @@ describe("email helpers", () => {
 
   it("sendInvitationEmail skips when key is placeholder", async () => {
     process.env.RESEND_API_KEY = "re_placeholder_replace_me";
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
     const result = await sendInvitationEmail({
       to: "a@example.com",
       orgName: "Acme",
@@ -58,6 +59,8 @@ describe("email helpers", () => {
     });
     expect(result).toEqual({ sent: false, reason: "placeholder" });
     expect(sendMock).not.toHaveBeenCalled();
+    expect(JSON.stringify(info.mock.calls)).not.toMatch(/invite\/tok/);
+    info.mockRestore();
   });
 
   it("sendInvitationEmail calls Resend with correct params", async () => {

@@ -16,6 +16,7 @@ vi.mock("@/lib/db", () => ({
       create: vi.fn(),
       update: vi.fn(),
       delete: vi.fn(),
+      count: vi.fn().mockResolvedValue(0),
     },
     board: {
       findFirst: vi.fn(),
@@ -23,6 +24,7 @@ vi.mock("@/lib/db", () => ({
       create: vi.fn(),
       update: vi.fn(),
       delete: vi.fn(),
+      count: vi.fn().mockResolvedValue(0),
     },
     column: {
       findFirst: vi.fn(),
@@ -38,11 +40,39 @@ vi.mock("@/lib/db", () => ({
       update: vi.fn(),
       delete: vi.fn(),
     },
+    attachment: {
+      findMany: vi.fn().mockResolvedValue([]),
+      aggregate: vi.fn().mockResolvedValue({ _sum: { sizeBytes: 0 } }),
+    },
     membership: {
+      findFirst: vi.fn(),
+    },
+    activityLog: {
+      create: vi.fn().mockResolvedValue({ id: "act-1" }),
+    },
+    notification: {
+      create: vi.fn().mockResolvedValue({ id: "notif-1" }),
       findFirst: vi.fn(),
     },
     $transaction: vi.fn(),
   },
+}));
+
+vi.mock("@/lib/notifications", () => ({
+  createNotification: vi.fn().mockResolvedValue({ id: "notif-1" }),
+}));
+
+vi.mock("@/lib/realtime-bus", () => ({
+  publishRealtime: vi.fn(),
+}));
+
+vi.mock("@/lib/storage", () => ({
+  getStorage: vi.fn().mockResolvedValue({
+    deleteObject: vi.fn().mockResolvedValue(undefined),
+    objectExists: vi.fn().mockResolvedValue(true),
+    createUploadUrl: vi.fn(),
+    createDownloadUrl: vi.fn(),
+  }),
 }));
 
 import { auth } from "@/lib/auth";
@@ -58,11 +88,13 @@ import {
   createBoard,
   createColumn,
   getBoardForOrg,
+  listBoardsForProject,
   updateBoard,
   deleteBoard,
   updateColumn,
   deleteColumn,
   reorderColumn,
+  moveColumn,
 } from "@/actions/board";
 import {
   createCard,
@@ -126,6 +158,37 @@ describe("cross-tenant isolation (Project / Board / Column / Card)", () => {
         where: { organizationId: ORG_A },
       })
     );
+  });
+
+  it("listBoardsForProject returns not found for a foreign projectId", async () => {
+    mockTenant(ORG_A);
+    vi.mocked(db.project.findFirst).mockResolvedValue(null);
+
+    const result = await listBoardsForProject({
+      organizationId: ORG_A,
+      projectId: "proj-b",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe("Project not found");
+    expect(db.project.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "proj-b", organizationId: ORG_A },
+      })
+    );
+    expect(db.board.findMany).not.toHaveBeenCalled();
+  });
+
+  it("createBoard denies MEMBER", async () => {
+    mockTenant(ORG_A, "MEMBER");
+    const result = await createBoard({
+      organizationId: ORG_A,
+      projectId: "p1",
+      name: "Board",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe("Access denied");
+    expect(db.project.findFirst).not.toHaveBeenCalled();
   });
 
   it("createBoard refuses project belonging to another org (join path)", async () => {
@@ -194,12 +257,14 @@ describe("cross-tenant isolation (Project / Board / Column / Card)", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toBe("Column not found");
-    expect(db.column.findFirst).toHaveBeenCalledWith({
-      where: {
-        id: "col-from-b",
-        board: { project: { organizationId: ORG_A } },
-      },
-    });
+    expect(db.column.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          id: "col-from-b",
+          board: { project: { organizationId: ORG_A } },
+        },
+      })
+    );
   });
 
   it("updateCard / deleteCard refuse cards outside tenant join path", async () => {
@@ -221,12 +286,14 @@ describe("cross-tenant isolation (Project / Board / Column / Card)", () => {
     expect(del.ok).toBe(false);
     if (!del.ok) expect(del.error).toBe("Card not found");
 
-    expect(db.card.findFirst).toHaveBeenCalledWith({
-      where: {
-        id: "card-b",
-        column: { board: { project: { organizationId: ORG_A } } },
-      },
-    });
+    expect(db.card.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          id: "card-b",
+          column: { board: { project: { organizationId: ORG_A } } },
+        },
+      })
+    );
   });
 
   it("does not create a project when caller is VIEWER", async () => {
@@ -272,6 +339,7 @@ describe("P1 CRUD permission + happy paths", () => {
         create: vi.fn().mockResolvedValue({ id: "p1", name: "Alpha" }),
       },
       board: { create: vi.fn().mockResolvedValue({ id: "b1" }) },
+      activityLog: { create: vi.fn().mockResolvedValue({ id: "act-1" }) },
     };
     vi.mocked(db.$transaction).mockImplementation(async (fn) =>
       (fn as unknown as (t: typeof tx) => Promise<unknown>)(tx)
@@ -285,6 +353,7 @@ describe("P1 CRUD permission + happy paths", () => {
     expect(tx.board.create).toHaveBeenCalledWith({
       data: { projectId: "p1", name: "Main", position: 0 },
     });
+    expect(tx.activityLog.create).toHaveBeenCalled();
   });
 
   it("deleteProject denies MEMBER", async () => {
@@ -318,8 +387,17 @@ describe("P1 CRUD permission + happy paths", () => {
     vi.mocked(db.column.findFirst).mockResolvedValue({
       id: "c1",
       boardId: "b1",
+      name: "Doing",
     } as never);
-    vi.mocked(db.column.update).mockResolvedValue({ id: "c1" } as never);
+    const tx = {
+      column: {
+        update: vi.fn().mockResolvedValue({ id: "c1", name: "Doing" }),
+      },
+      activityLog: { create: vi.fn().mockResolvedValue({ id: "act-1" }) },
+    };
+    vi.mocked(db.$transaction).mockImplementation(async (fn) =>
+      (fn as unknown as (t: typeof tx) => Promise<unknown>)(tx)
+    );
 
     const upd = await updateColumn({
       organizationId: ORG_A,
@@ -348,12 +426,19 @@ describe("P1 CRUD permission + happy paths", () => {
       id: "c2",
       boardId: "b1",
       position: 1,
+      name: "Col",
     } as never);
     vi.mocked(db.column.findMany).mockResolvedValue([
       { id: "c1", position: 0 },
       { id: "c2", position: 1 },
     ] as never);
-    vi.mocked(db.$transaction).mockResolvedValue([]);
+    const tx = {
+      column: { update: vi.fn() },
+      activityLog: { create: vi.fn().mockResolvedValue({ id: "act" }) },
+    };
+    vi.mocked(db.$transaction).mockImplementation(async (fn) =>
+      (fn as unknown as (t: typeof tx) => Promise<unknown>)(tx)
+    );
 
     const result = await reorderColumn({
       organizationId: ORG_A,
@@ -391,12 +476,25 @@ describe("P1 CRUD permission + happy paths", () => {
     mockTenant(ORG_A, "MEMBER");
     vi.mocked(db.column.findFirst).mockResolvedValue({
       id: "col-1",
+      boardId: "b1",
     } as never);
     vi.mocked(db.membership.findFirst).mockResolvedValue({
       id: "m2",
     } as never);
     vi.mocked(db.card.findFirst).mockResolvedValue(null);
-    vi.mocked(db.card.create).mockResolvedValue({ id: "card-1" } as never);
+    const tx = {
+      card: {
+        create: vi.fn().mockResolvedValue({
+          id: "card-1",
+          title: "Task",
+          assigneeId: "user-b",
+        }),
+      },
+      activityLog: { create: vi.fn().mockResolvedValue({ id: "act-1" }) },
+    };
+    vi.mocked(db.$transaction).mockImplementation(async (fn) =>
+      (fn as unknown as (t: typeof tx) => Promise<unknown>)(tx)
+    );
 
     const result = await createCard({
       organizationId: ORG_A,
@@ -409,6 +507,7 @@ describe("P1 CRUD permission + happy paths", () => {
       where: { userId: "user-b", organizationId: ORG_A },
       select: { id: true },
     });
+    expect(tx.card.create).toHaveBeenCalled();
   });
 
   it("deleteCard denies VIEWER", async () => {
@@ -464,5 +563,146 @@ describe("P1 CRUD permission + happy paths", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toBe("Column not found");
     expect(db.card.update).not.toHaveBeenCalled();
+  });
+
+  it("deleteProject foreign id scopes by organizationId", async () => {
+    mockTenant(ORG_A);
+    vi.mocked(db.project.findFirst).mockResolvedValue(null);
+    const result = await deleteProject({
+      organizationId: ORG_A,
+      projectId: "proj-from-b",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe("Project not found");
+    expect(db.project.findFirst).toHaveBeenCalledWith({
+      where: { id: "proj-from-b", organizationId: ORG_A },
+    });
+  });
+
+  it("updateBoard / deleteBoard foreign board miss via project.organizationId", async () => {
+    mockTenant(ORG_A);
+    vi.mocked(db.board.findFirst).mockResolvedValue(null);
+    const up = await updateBoard({
+      organizationId: ORG_A,
+      boardId: "board-b",
+      name: "X",
+    });
+    expect(up.ok).toBe(false);
+    if (!up.ok) expect(up.error).toBe("Board not found");
+
+    const del = await deleteBoard({
+      organizationId: ORG_A,
+      boardId: "board-b",
+    });
+    expect(del.ok).toBe(false);
+    if (!del.ok) expect(del.error).toBe("Board not found");
+  });
+
+  it("moveColumn foreign column miss via board.project.organizationId", async () => {
+    mockTenant(ORG_A);
+    vi.mocked(db.column.findFirst).mockResolvedValue(null);
+    const result = await moveColumn({
+      organizationId: ORG_A,
+      columnId: "col-foreign",
+      beforeColumnId: null,
+      afterColumnId: null,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe("Column not found");
+    expect(db.column.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: "col-foreign",
+        board: { project: { organizationId: ORG_A } },
+      },
+    });
+  });
+
+  it("reorderCard foreign card miss", async () => {
+    mockTenant(ORG_A, "MEMBER");
+    vi.mocked(db.card.findFirst).mockResolvedValue(null);
+    const result = await reorderCard({
+      organizationId: ORG_A,
+      cardId: "card-foreign",
+      direction: "up",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe("Card not found");
+  });
+});
+
+describe("Postgres RLS defense in depth", () => {
+  it("unscoped Project reads cannot see another tenant once RLS is active", async () => {
+    const databaseUrl = process.env.DATABASE_URL?.trim();
+    if (!databaseUrl) {
+      console.log("[rls-integration] SKIP: DATABASE_URL is not set");
+      return;
+    }
+
+    console.log(
+      "[rls-integration] EXECUTE: connecting to Postgres and running RLS queries"
+    );
+
+    const { Pool } = await import("pg");
+    const pool = new Pool({
+      connectionString: databaseUrl,
+      connectionTimeoutMillis: 5000,
+    });
+    const stamp = Date.now();
+    const orgA = `rls-org-a-${stamp}`;
+    const orgB = `rls-org-b-${stamp}`;
+    const projectA = `rls-proj-a-${stamp}`;
+    const projectB = `rls-proj-b-${stamp}`;
+
+    try {
+      const policies = await pool.query(
+        `SELECT 1 FROM pg_policies WHERE tablename = 'Project' AND policyname = 'tenant_isolation'`
+      );
+      if ((policies.rowCount ?? 0) === 0) {
+        throw new Error(
+          "RLS policy tenant_isolation is missing on Project. Run `npm run migrate:deploy`."
+        );
+      }
+
+      const client = await pool.connect();
+      try {
+        await client.query(`SELECT set_config('app.bypass_rls', 'on', false)`);
+        await client.query(
+          `INSERT INTO "Organization" (id, name, slug, "createdAt", "updatedAt")
+           VALUES ($1, 'RLS A', $2, NOW(), NOW()), ($3, 'RLS B', $4, NOW(), NOW())`,
+          [orgA, `rls-a-${stamp}`, orgB, `rls-b-${stamp}`]
+        );
+        await client.query(
+          `INSERT INTO "Project" (id, "organizationId", name, "createdAt", "updatedAt")
+           VALUES ($1, $2, 'A', NOW(), NOW()), ($3, $4, 'B', NOW(), NOW())`,
+          [projectA, orgA, projectB, orgB]
+        );
+        await client.query(`SELECT set_config('app.bypass_rls', 'off', false)`);
+
+        await client.query("BEGIN");
+        await client.query(`SET LOCAL ROLE syzx_app`);
+        await client.query(`SELECT set_config('app.current_org_id', $1, true)`, [
+          orgA,
+        ]);
+        await client.query(`SELECT set_config('app.bypass_rls', 'off', true)`);
+        const scoped = await client.query(`SELECT id FROM "Project"`);
+        const ids = scoped.rows.map((row: { id: string }) => row.id);
+        console.log(
+          `[rls-integration] PASS: unscoped SELECT under org A returned ${ids.length} row(s); foreign project hidden=${!ids.includes(projectB)}`
+        );
+        expect(ids).toContain(projectA);
+        expect(ids).not.toContain(projectB);
+        await client.query("ROLLBACK");
+
+        await client.query(`SELECT set_config('app.bypass_rls', 'on', false)`);
+        await client.query(
+          `DELETE FROM "Organization" WHERE id = ANY($1::text[])`,
+          [[orgA, orgB]]
+        );
+      } finally {
+        client.release();
+      }
+    } finally {
+      await pool.end().catch(() => undefined);
+    }
   });
 });

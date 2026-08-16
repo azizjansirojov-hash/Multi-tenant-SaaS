@@ -1,6 +1,8 @@
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { runWithRlsBypass } from "@/lib/rls";
 import { InviteAcceptClient } from "@/components/invite/invite-accept-client";
+import { copy } from "@/lib/copy";
 
 export default async function InvitePage({
   params,
@@ -11,10 +13,12 @@ export default async function InvitePage({
   const session = await auth();
   const authenticated = Boolean(session?.user?.id);
 
-  const invitation = await db.invitation.findUnique({
-    where: { token },
-    include: { organization: { select: { name: true } } },
-  });
+  const invitation = await runWithRlsBypass(() =>
+    db.invitation.findUnique({
+      where: { token },
+      include: { organization: { select: { name: true } } },
+    })
+  );
 
   if (!invitation) {
     return (
@@ -22,7 +26,7 @@ export default async function InvitePage({
         token={token}
         authenticated={authenticated}
         preview={null}
-        previewError="Invitation not found"
+        previewError={copy.invite.notFound}
       />
     );
   }

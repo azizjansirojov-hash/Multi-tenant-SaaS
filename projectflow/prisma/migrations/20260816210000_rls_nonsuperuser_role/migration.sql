@@ -1,0 +1,18 @@
+-- Table owners with SUPERUSER (Docker POSTGRES_USER) bypass RLS even with
+-- FORCE ROW LEVEL SECURITY. The application must SET ROLE to this login
+-- (or connect as it) for policies to apply.
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'syzx_app') THEN
+    CREATE ROLE syzx_app LOGIN PASSWORD 'syzx_app_dev_only' NOSUPERUSER NOBYPASSRLS;
+  END IF;
+  ALTER ROLE syzx_app WITH NOSUPERUSER NOBYPASSRLS;
+END
+$$;
+
+GRANT USAGE ON SCHEMA public TO syzx_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO syzx_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO syzx_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO syzx_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO syzx_app;

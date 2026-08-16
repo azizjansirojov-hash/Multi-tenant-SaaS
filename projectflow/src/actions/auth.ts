@@ -1,8 +1,8 @@
 "use server";
 
 // Requires Node.js runtime (native addon) — do not move to Edge Runtime.
-import bcrypt from "bcrypt";
 import { AuthError } from "next-auth";
+import { safeActionError } from "@/lib/action-errors";
 import { auth, signIn } from "@/lib/auth";
 import { db } from "@/lib/db";
 import {
@@ -10,6 +10,7 @@ import {
   enforceLoginRateLimit,
   enforceRegisterRateLimit,
 } from "@/lib/rate-limit";
+import { runWithRlsBypass } from "@/lib/rls";
 import {
   ActionResult,
   changePasswordSchema,
@@ -35,83 +36,109 @@ export async function registerAction(
     return zodErrorResult(parsed.error);
   }
 
-  const limited = await enforceRegisterRateLimit();
-  if (limited) return limited;
-
-  const { name, email, password, organizationName } = parsed.data;
-
-  const existing = await db.user.findUnique({ where: { email } });
-  if (existing) {
-    return { ok: false, error: "Email already registered" };
-  }
-
-  const baseSlug = slugify(organizationName) || "org";
-  let slug = baseSlug;
-  let n = 1;
-  while (await db.organization.findUnique({ where: { slug } })) {
-    slug = `${baseSlug}-${n++}`;
-  }
-
-  const passwordHash = await bcrypt.hash(password, 12);
-
-  const result = await db.$transaction(async (tx) => {
-    const user = await tx.user.create({
-      data: { email, name, passwordHash },
-    });
-    const organization = await tx.organization.create({
-      data: { name: organizationName, slug },
-    });
-    await tx.membership.create({
-      data: {
-        userId: user.id,
-        organizationId: organization.id,
-        role: "OWNER",
-      },
-    });
-    return { orgSlug: organization.slug };
-  });
-
   try {
-    await signIn("credentials", {
-      email,
-      password,
-      redirect: false,
-    });
-  } catch (error) {
-    if (error instanceof AuthError) {
-      return { ok: false, error: "Registered but sign-in failed. Please log in." };
-    }
-    throw error;
-  }
+    const limited = await enforceRegisterRateLimit();
+    if (limited) return limited;
 
-  return { ok: true, data: result };
+    const { name, email, password, organizationName } = parsed.data;
+
+    const existing = await db.user.findUnique({ where: { email } });
+    if (existing) {
+      return { ok: false, error: "Email already registered" };
+    }
+
+    const baseSlug = slugify(organizationName) || "org";
+    let slug = baseSlug;
+    let n = 1;
+    while (await db.organization.findUnique({ where: { slug } })) {
+      slug = `${baseSlug}-${n++}`;
+    }
+
+    const bcrypt = await import("bcrypt");
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    const result = await runWithRlsBypass(() =>
+      db.$transaction(async (tx) => {
+        const user = await tx.user.create({
+          data: { email, name, passwordHash },
+        });
+        const organization = await tx.organization.create({
+          data: { name: organizationName, slug },
+        });
+        await tx.membership.create({
+          data: {
+            userId: user.id,
+            organizationId: organization.id,
+            role: "OWNER",
+          },
+        });
+        return { orgSlug: organization.slug };
+      })
+    );
+
+    try {
+      await signIn("credentials", {
+        email,
+        password,
+        redirect: false,
+      });
+    } catch (error) {
+      if (error instanceof AuthError) {
+        return { ok: false, error: "Registered but sign-in failed. Please log in." };
+      }
+      throw error;
+    }
+
+    return { ok: true, data: result };
+  } catch (error) {
+    return safeActionError(error);
+  }
 }
 
 export async function loginAction(
   input: unknown
-): Promise<ActionResult<{ ok: true }>> {
+): Promise<ActionResult<{ ok: true; orgSlug: string | null }>> {
   const parsed = loginSchema.safeParse(input);
   if (!parsed.success) {
     return zodErrorResult(parsed.error);
   }
 
-  const limited = await enforceLoginRateLimit(parsed.data.email);
-  if (limited) return limited;
-
   try {
-    await signIn("credentials", {
-      email: parsed.data.email,
-      password: parsed.data.password,
-      redirect: false,
-    });
-  } catch (error) {
-    if (error instanceof AuthError) {
-      return { ok: false, error: "Invalid email or password" };
-    }
-    throw error;
-  }
+    const limited = await enforceLoginRateLimit(parsed.data.email);
+    if (limited) return limited;
 
-  return { ok: true, data: { ok: true } };
+    try {
+      await signIn("credentials", {
+        email: parsed.data.email,
+        password: parsed.data.password,
+        redirect: false,
+      });
+    } catch (error) {
+      if (error instanceof AuthError) {
+        return { ok: false, error: "Invalid email or password" };
+      }
+      throw error;
+    }
+
+    // Prefer earliest membership (registration org); null if none (edge case).
+    const user = await runWithRlsBypass(() =>
+      db.user.findUnique({
+        where: { email: parsed.data.email },
+        select: {
+          memberships: {
+            orderBy: { createdAt: "asc" },
+            take: 1,
+            select: { organization: { select: { slug: true } } },
+          },
+        },
+      })
+    );
+    const orgSlug = user?.memberships[0]?.organization.slug ?? null;
+
+    return { ok: true, data: { ok: true, orgSlug } };
+  } catch (error) {
+    return safeActionError(error);
+  }
 }
 
 export async function getSessionUser() {
@@ -142,6 +169,7 @@ export async function changePassword(
     return { ok: false, error: "Access denied" };
   }
 
+  const bcrypt = await import("bcrypt");
   const valid = await bcrypt.compare(
     parsed.data.currentPassword,
     user.passwordHash
@@ -158,6 +186,22 @@ export async function changePassword(
       sessionVersion: { increment: 1 },
     },
   });
+
+  try {
+    await signIn("credentials", {
+      email: user.email,
+      password: parsed.data.newPassword,
+      redirect: false,
+    });
+  } catch (error) {
+    if (error instanceof AuthError) {
+      return {
+        ok: false,
+        error: "Password updated. Please log in again.",
+      };
+    }
+    throw error;
+  }
 
   return { ok: true, data: { ok: true } };
 }

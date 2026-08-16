@@ -1,5 +1,6 @@
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { enterTenantRls, enterUserRls, rememberRlsContextForRequest } from "@/lib/rls";
 import { isSessionVersionValid } from "@/lib/session-version";
 import type { Membership, Organization, Role } from "@/generated/prisma/client";
 
@@ -19,6 +20,8 @@ async function requireValidSessionUserId(): Promise<string> {
   }
 
   // Defense in depth: re-check sessionVersion even if JWT cookie still present
+  enterUserRls(userId);
+
   const dbUser = await db.user.findUnique({
     where: { id: userId },
     select: { sessionVersion: true },
@@ -45,6 +48,13 @@ export async function getTenantId(orgSlug: string): Promise<TenantContext> {
   if (!organization) {
     throw new Error("Organization not found");
   }
+
+  enterTenantRls(organization.id, userId);
+  await rememberRlsContextForRequest({
+    organizationId: organization.id,
+    userId,
+    bypass: false,
+  });
 
   const membership = await db.membership.findUnique({
     where: {
@@ -83,6 +93,13 @@ export async function requireMembership(
   if (!organization) {
     throw new Error("Organization not found");
   }
+
+  enterTenantRls(organization.id, userId);
+  await rememberRlsContextForRequest({
+    organizationId: organization.id,
+    userId,
+    bypass: false,
+  });
 
   const membership = await db.membership.findUnique({
     where: {

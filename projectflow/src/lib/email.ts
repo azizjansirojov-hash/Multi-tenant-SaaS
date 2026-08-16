@@ -38,7 +38,7 @@ export async function sendInvitationEmail(
   if (!isResendConfigured()) {
     console.info(
       "[email] RESEND_API_KEY is missing or a placeholder — skipping send.",
-      { to: input.to, inviteUrl: input.inviteUrl }
+      { to: input.to }
     );
     return { sent: false, reason: "placeholder" };
   }

@@ -1,4 +1,5 @@
 import { headers } from "next/headers";
+import { clientIpFromHeaders } from "@/lib/client-ip";
 import { db } from "@/lib/db";
 
 /** Tunable defaults — adjust as product needs evolve. */
@@ -7,6 +8,8 @@ export const RATE_LIMITS = {
   register: { limit: 10, windowMs: 60 * 60 * 1000 },
   invite: { limit: 20, windowMs: 60 * 60 * 1000 },
   changePassword: { limit: 5, windowMs: 15 * 60 * 1000 },
+  comment: { limit: 30, windowMs: 15 * 60 * 1000 },
+  upload: { limit: 20, windowMs: 15 * 60 * 1000 },
 } as const;
 
 export type RateLimitResult =
@@ -103,14 +106,7 @@ export function rateLimitErrorMessage(retryAfterSeconds: number): string {
 
 export async function clientIp(): Promise<string> {
   try {
-    const h = await headers();
-    const forwarded = h.get("x-forwarded-for");
-    if (forwarded) {
-      const first = forwarded.split(",")[0]?.trim();
-      if (first) return first;
-    }
-    const realIp = h.get("x-real-ip")?.trim();
-    if (realIp) return realIp;
+    return await clientIpFromHeaders(await headers());
   } catch {
     // headers() unavailable outside a request context (e.g. some tests)
   }
@@ -185,6 +181,38 @@ export async function enforceChangePasswordRateLimit(
   const check = await checkRateLimit({
     key: `password:user:${userId}`,
     ...RATE_LIMITS.changePassword,
+  });
+  if (!check.allowed) {
+    return {
+      ok: false,
+      error: rateLimitErrorMessage(check.retryAfterSeconds),
+    };
+  }
+  return null;
+}
+
+export async function enforceCommentRateLimit(
+  userId: string
+): Promise<{ ok: false; error: string } | null> {
+  const check = await checkRateLimit({
+    key: `comment:user:${userId}`,
+    ...RATE_LIMITS.comment,
+  });
+  if (!check.allowed) {
+    return {
+      ok: false,
+      error: rateLimitErrorMessage(check.retryAfterSeconds),
+    };
+  }
+  return null;
+}
+
+export async function enforceUploadRateLimit(
+  userId: string
+): Promise<{ ok: false; error: string } | null> {
+  const check = await checkRateLimit({
+    key: `upload:user:${userId}`,
+    ...RATE_LIMITS.upload,
   });
   if (!check.allowed) {
     return {

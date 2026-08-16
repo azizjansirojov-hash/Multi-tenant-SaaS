@@ -1,10 +1,11 @@
 import { auth } from "@/lib/auth";
+import { db } from "@/lib/db";
 import { getTenantId } from "@/lib/tenant";
 import { can } from "@/lib/permissions";
-import { listMembers } from "@/actions/organization";
+import { listMembers, listPendingInvitations } from "@/actions/organization";
 import { MembersSettingsClient } from "@/components/members/members-settings-client";
 import { redirect } from "next/navigation";
-import Link from "next/link";
+import { copy } from "@/lib/copy";
 
 export default async function MembersPage({
   params,
@@ -25,36 +26,44 @@ export default async function MembersPage({
   }
 
   if (!can(tenant.role, "view_card", "card")) {
-    return <main className="p-8">Access denied</main>;
+    return <div className="p-8">{copy.errors.accessDenied}</div>;
   }
 
   const members = await listMembers(tenant.organizationId);
   if (!members.ok) {
     return (
-      <main className="p-8">
+      <div className="p-8">
         <p className="text-destructive">{members.error}</p>
-      </main>
+      </div>
     );
   }
 
   const canManage = can(tenant.role, "manage_members", "members");
+  const pending = canManage
+    ? await listPendingInvitations({ organizationId: tenant.organizationId })
+    : { ok: true as const, data: [] };
+
+  const otherMembership = await db.membership.findFirst({
+    where: {
+      userId: tenant.userId,
+      organizationId: { not: tenant.organizationId },
+    },
+    select: { organization: { select: { slug: true } } },
+    orderBy: { createdAt: "asc" },
+  });
 
   return (
-    <>
-      <nav className="border-b border-border px-8 py-3 text-sm">
-        <Link href={`/${orgSlug}/projects`} className="text-muted-foreground hover:text-foreground">
-          ← Projects
-        </Link>
-      </nav>
-      <MembersSettingsClient
-        organizationId={tenant.organizationId}
-        orgName={tenant.organization.name}
-        orgSlug={tenant.organization.slug}
-        currentUserId={tenant.userId}
-        currentRole={tenant.role}
-        members={members.data}
-        canManage={canManage}
-      />
-    </>
+    <MembersSettingsClient
+      organizationId={tenant.organizationId}
+      orgName={tenant.organization.name}
+      orgSlug={tenant.organization.slug}
+      currentUserId={tenant.userId}
+      currentRole={tenant.role}
+      members={members.data}
+      pendingInvitations={pending.ok ? pending.data : []}
+      canManage={canManage}
+      canDeleteOrg={can(tenant.role, "delete_organization")}
+      otherOrgSlug={otherMembership?.organization.slug ?? null}
+    />
   );
 }

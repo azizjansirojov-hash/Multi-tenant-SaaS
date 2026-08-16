@@ -4,6 +4,7 @@ import { can } from "@/lib/permissions";
 import { listProjects } from "@/actions/project";
 import { ProjectsClient } from "@/components/projects/projects-client";
 import { redirect } from "next/navigation";
+import { copy } from "@/lib/copy";
 
 export default async function ProjectsPage({
   params,
@@ -24,7 +25,7 @@ export default async function ProjectsPage({
   }
 
   if (!can(tenant.role, "view_card", "card")) {
-    return <main className="p-8">Access denied</main>;
+    return <main className="p-8">{copy.errors.accessDenied}</main>;
   }
 
   const projects = await listProjects(tenant.organizationId);
